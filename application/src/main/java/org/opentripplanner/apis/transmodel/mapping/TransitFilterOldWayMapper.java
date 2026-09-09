@@ -31,8 +31,10 @@ class TransitFilterOldWayMapper {
     TransitRequestBuilder transitBuilder
   ) {
     if (
-      !(GqlUtil.hasArgument(environment, "modes") &&
-        ((Map<String, Object>) environment.getArgument("modes")).containsKey("transportModes")) &&
+      !(
+        GqlUtil.hasArgument(environment, "modes") &&
+        ((Map<String, Object>) environment.getArgument("modes")).containsKey("transportModes")
+      ) &&
       !GqlUtil.hasArgument(environment, "whiteListed") &&
       !GqlUtil.hasArgument(environment, "banned")
     ) {
@@ -109,10 +111,10 @@ class TransitFilterOldWayMapper {
       if (modeWithSubmodes.containsKey("transportMode")) {
         var mainMode = (TransitMode) modeWithSubmodes.get("transportMode");
 
-        if (modeWithSubmodes.containsKey("transportSubModes")) {
-          var transportSubModes = (List<TransmodelTransportSubmode>) modeWithSubmodes.get(
-            "transportSubModes"
-          );
+        var transportSubModes = (List<TransmodelTransportSubmode>) modeWithSubmodes.get(
+          "transportSubModes"
+        );
+        if (transportSubModes != null) {
           for (TransmodelTransportSubmode submode : transportSubModes) {
             tModes.add(new MainAndSubMode(mainMode, SubMode.of(submode.getValue())));
           }

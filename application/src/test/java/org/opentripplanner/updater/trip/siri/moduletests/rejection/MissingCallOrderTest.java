@@ -1,17 +1,18 @@
 package org.opentripplanner.updater.trip.siri.moduletests.rejection;
 
-import static org.opentripplanner.updater.spi.UpdateError.UpdateErrorType.MISSING_CALL_ORDER;
-import static org.opentripplanner.updater.spi.UpdateError.UpdateErrorType.MIXED_CALL_ORDER_AND_VISIT_NUMBER;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.opentripplanner.updater.spi.UpdateErrorType.MISSING_CALL_ORDER;
+import static org.opentripplanner.updater.spi.UpdateErrorType.MIXED_CALL_ORDER_AND_VISIT_NUMBER;
 import static org.opentripplanner.updater.spi.UpdateResultAssertions.assertFailure;
 import static org.opentripplanner.updater.spi.UpdateResultAssertions.assertSuccess;
 
 import org.junit.jupiter.api.Test;
-import org.opentripplanner.transit.model._data.TransitTestEnvironment;
-import org.opentripplanner.transit.model._data.TransitTestEnvironmentBuilder;
-import org.opentripplanner.transit.model._data.TripInput;
+import org.opentripplanner.transit.model.TransitTestEnvironment;
+import org.opentripplanner.transit.model.TransitTestEnvironmentBuilder;
+import org.opentripplanner.transit.model.TripInput;
 import org.opentripplanner.transit.model.site.RegularStop;
 import org.opentripplanner.updater.trip.RealtimeTestConstants;
-import org.opentripplanner.updater.trip.SiriTestHelper;
+import org.opentripplanner.updater.trip.siri.SiriTestHelper;
 
 class MissingCallOrderTest implements RealtimeTestConstants {
 
@@ -107,7 +108,7 @@ class MissingCallOrderTest implements RealtimeTestConstants {
   }
 
   @Test
-  void rejectMixedOrderAndVisitNumber() {
+  void preferOrderToVisitNumber() {
     var env = ENV_BUILDER.addTrip(TRIP_INPUT).build();
     var siri = SiriTestHelper.of(env);
 
@@ -120,14 +121,20 @@ class MissingCallOrderTest implements RealtimeTestConstants {
           .withVisitNumber(1)
           .departAimedExpected("00:00:11", "00:00:15")
           .call(STOP_B)
+          .withVisitNumber(3)
           .departAimedExpected("00:00:21", "00:00:25")
           .call(STOP_C)
+          .withVisitNumber(2)
           .arriveAimedExpected("00:00:40", "00:00:45")
       )
       .buildEstimatedTimetableDeliveries();
 
     var result = siri.applyEstimatedTimetable(updates);
-    assertFailure(MIXED_CALL_ORDER_AND_VISIT_NUMBER, result);
+    assertSuccess(result);
+    assertEquals(
+      "U | A 0:00:15 0:00:15 | B 0:00:20 0:00:25 | C 0:00:45 0:00:45",
+      env.tripData(TRIP_1_ID).showTimetable()
+    );
   }
 
   @Test

@@ -1,7 +1,11 @@
 package org.opentripplanner.updater.trip.siri;
 
+import static org.opentripplanner.updater.trip.siri.support.NaturalLanguageStringHelper.getFirstStringFromList;
+
 import java.time.ZonedDateTime;
 import java.util.List;
+import org.opentripplanner.transit.model.timetable.OccupancyStatus;
+import org.opentripplanner.updater.trip.siri.mapping.OccupancyMapper;
 import uk.org.siri.siri21.ArrivalBoardingActivityEnumeration;
 import uk.org.siri.siri21.CallStatusEnumeration;
 import uk.org.siri.siri21.DepartureBoardingActivityEnumeration;
@@ -11,6 +15,7 @@ import uk.org.siri.siri21.OccupancyEnumeration;
 public class TestCall implements CallWrapper {
 
   private final String stopPointRef;
+  private final int sortOrder;
   private final Boolean cancellation;
   private final boolean extraCall;
   private final Boolean predictionInaccurate;
@@ -30,6 +35,7 @@ public class TestCall implements CallWrapper {
 
   private TestCall(
     String stopPointRef,
+    int sortOrder,
     Boolean cancellation,
     boolean extraCall,
     Boolean predictionInaccurate,
@@ -48,6 +54,7 @@ public class TestCall implements CallWrapper {
     boolean isRecorded
   ) {
     this.stopPointRef = stopPointRef;
+    this.sortOrder = sortOrder;
     this.cancellation = cancellation;
     this.extraCall = extraCall;
     this.predictionInaccurate = predictionInaccurate;
@@ -76,18 +83,8 @@ public class TestCall implements CallWrapper {
   }
 
   @Override
-  public boolean hasOrder() {
-    return false;
-  }
-
-  @Override
-  public boolean hasVisitNumber() {
-    return false;
-  }
-
-  @Override
   public int getSortOrder() {
-    return 0;
+    return sortOrder;
   }
 
   @Override
@@ -106,13 +103,13 @@ public class TestCall implements CallWrapper {
   }
 
   @Override
-  public OccupancyEnumeration getOccupancy() {
-    return occupancy;
+  public OccupancyStatus getOccupancy() {
+    return occupancy == null ? null : OccupancyMapper.mapOccupancyStatus(occupancy);
   }
 
   @Override
-  public List<NaturalLanguageStringStructure> getDestinationDisplays() {
-    return destinationDisplaies;
+  public String destinationDisplay() {
+    return getFirstStringFromList(destinationDisplaies);
   }
 
   @Override
@@ -131,16 +128,6 @@ public class TestCall implements CallWrapper {
   }
 
   @Override
-  public CallStatusEnumeration getArrivalStatus() {
-    return arrivalStatus;
-  }
-
-  @Override
-  public ArrivalBoardingActivityEnumeration getArrivalBoardingActivity() {
-    return arrivalBoardingActivity;
-  }
-
-  @Override
   public ZonedDateTime getAimedDepartureTime() {
     return aimedDepartureTime;
   }
@@ -156,13 +143,13 @@ public class TestCall implements CallWrapper {
   }
 
   @Override
-  public CallStatusEnumeration getDepartureStatus() {
-    return departureStatus;
+  public PickDropChange dropOff() {
+    return PickDropChange.ofArrival(cancellation, arrivalStatus, arrivalBoardingActivity);
   }
 
   @Override
-  public DepartureBoardingActivityEnumeration getDepartureBoardingActivity() {
-    return departureBoardingActivity;
+  public PickDropChange pickUp() {
+    return PickDropChange.ofDeparture(cancellation, departureStatus, departureBoardingActivity);
   }
 
   @Override
@@ -170,9 +157,20 @@ public class TestCall implements CallWrapper {
     return isRecorded;
   }
 
+  @Override
+  public boolean hasArrived() {
+    return isRecorded || arrivalStatus == CallStatusEnumeration.ARRIVED;
+  }
+
+  @Override
+  public boolean hasDeparted() {
+    return isRecorded && actualDepartureTime != null;
+  }
+
   public static class TestCallBuilder {
 
     private String stopPointRef = null;
+    private int sortOrder = 0;
     private Boolean cancellation = null;
     private boolean extraCall = false;
     private Boolean predictionInaccurate = null;
@@ -192,6 +190,11 @@ public class TestCall implements CallWrapper {
 
     public TestCallBuilder withStopPointRef(String stopPointRef) {
       this.stopPointRef = stopPointRef;
+      return this;
+    }
+
+    public TestCallBuilder withSortOrder(int sortOrder) {
+      this.sortOrder = sortOrder;
       return this;
     }
 
@@ -284,6 +287,7 @@ public class TestCall implements CallWrapper {
     public TestCall build() {
       return new TestCall(
         stopPointRef,
+        sortOrder,
         cancellation,
         extraCall,
         predictionInaccurate,

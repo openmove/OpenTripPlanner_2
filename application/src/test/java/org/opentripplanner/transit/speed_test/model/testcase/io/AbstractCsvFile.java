@@ -15,6 +15,7 @@ import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.opentripplanner.transit.speed_test.model.testcase.TestCase;
+import org.opentripplanner.utils.lang.StringUtils;
 import org.opentripplanner.utils.time.DurationUtils;
 import org.opentripplanner.utils.time.TimeUtils;
 import org.slf4j.Logger;
@@ -30,6 +31,7 @@ abstract class AbstractCsvFile<T> {
   private static final Charset CHARSET_UTF_8 = StandardCharsets.UTF_8;
   private static final char CSV_DELIMITER = ',';
   private static final String ARRAY_DELIMITER = "|";
+  private static final String LF = "\n";
 
   private final File file;
   private final String[] headers;
@@ -58,7 +60,7 @@ abstract class AbstractCsvFile<T> {
           }
           rows.add(parseRow());
         } catch (RuntimeException e) {
-          LOG.error("Parse error! Row: " + currentReader.getRawRecord());
+          LOG.error("Parse error! Row: {}", currentReader.getRawRecord());
           throw e;
         }
       }
@@ -75,7 +77,9 @@ abstract class AbstractCsvFile<T> {
    */
   public void write(List<T> rows) {
     try (PrintWriter out = new PrintWriter(file, CHARSET_UTF_8)) {
-      out.println(headerRow());
+      out.print(headerRow());
+      // use LF explicitly
+      out.print(LF);
 
       for (T row : rows) {
         boolean first = true;
@@ -86,12 +90,13 @@ abstract class AbstractCsvFile<T> {
           first = false;
           out.print(cell(row, header).replace(CSV_DELIMITER, '_'));
         }
-        out.println();
+        // use LF explicitly
+        out.print(LF);
       }
       out.flush();
-      LOG.info("INFO - New CSV file with is saved to '" + file.getAbsolutePath() + "'.");
+      LOG.info("INFO - New CSV file with is saved to '{}'.", file.getAbsolutePath());
     } catch (Exception e) {
-      LOG.error("Failed to store results: " + e.getMessage(), e);
+      LOG.error("Failed to store results: {}", e.getMessage(), e);
     }
   }
 
@@ -107,6 +112,11 @@ abstract class AbstractCsvFile<T> {
 
   protected int parseInt(String colName) throws IOException {
     return Integer.parseInt(parseString(colName));
+  }
+
+  protected int parseInt(String colName, int defaultValue) throws IOException {
+    var value = parseString(colName);
+    return StringUtils.hasValue(value) ? Integer.parseInt(value) : defaultValue;
   }
 
   protected double parseDouble(String colName) throws IOException {

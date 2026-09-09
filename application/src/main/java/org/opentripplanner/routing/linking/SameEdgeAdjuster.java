@@ -11,6 +11,7 @@ import org.opentripplanner.routing.api.response.RoutingErrorCode;
 import org.opentripplanner.routing.error.RoutingValidationException;
 import org.opentripplanner.street.Scope;
 import org.opentripplanner.street.graph.Graph;
+import org.opentripplanner.street.linking.DisposableEdgeCollection;
 import org.opentripplanner.street.model.edge.Edge;
 import org.opentripplanner.street.model.edge.StreetEdge;
 import org.opentripplanner.street.model.edge.TemporaryFreeEdge;
@@ -61,10 +62,7 @@ public class SameEdgeAdjuster {
         if (
           incoming instanceof TemporaryFreeEdge &&
           fromVertex instanceof StreetVertex &&
-          fromVertex
-            .getIncoming()
-            .stream()
-            .anyMatch(edge -> edge instanceof TemporaryPartialStreetEdge)
+          fromVertex.hasAnyIncomingMatching(edge -> edge instanceof TemporaryPartialStreetEdge)
         ) {
           // The vertex is connected with an TemporaryFreeEdge connector to the
           // TemporaryPartialStreetEdge

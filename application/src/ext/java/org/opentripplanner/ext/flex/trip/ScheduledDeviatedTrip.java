@@ -3,6 +3,7 @@ package org.opentripplanner.ext.flex.trip;
 import static org.opentripplanner.model.StopTime.MISSING_VALUE;
 
 import java.io.Serializable;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -22,12 +23,15 @@ import org.opentripplanner.transit.model.timetable.booking.BookingInfo;
  * locations, which are not stops, but other types, such as groups of stops or location areas.
  */
 public class ScheduledDeviatedTrip
-  extends FlexTrip<ScheduledDeviatedTrip, ScheduledDeviatedTripBuilder> {
+  extends FlexTrip<ScheduledDeviatedTrip, ScheduledDeviatedTripBuilder>
+{
 
   private final ScheduledDeviatedStopTime[] stopTimes;
 
   private final BookingInfo[] dropOffBookingInfos;
   private final BookingInfo[] pickupBookingInfos;
+
+  private final long maxSpanDays;
 
   ScheduledDeviatedTrip(ScheduledDeviatedTripBuilder builder) {
     super(builder);
@@ -46,6 +50,13 @@ public class ScheduledDeviatedTrip
       this.dropOffBookingInfos[i] = stopTimes.get(i).getDropOffBookingInfo();
       this.pickupBookingInfos[i] = stopTimes.get(i).getPickupBookingInfo();
     }
+
+    var latestArrivalTime = Arrays.stream(this.stopTimes)
+      .mapToInt(st -> st.arrivalTime)
+      .max()
+      .orElse(0);
+
+    this.maxSpanDays = Duration.ofSeconds(latestArrivalTime).toDays();
   }
 
   public static ScheduledDeviatedTripBuilder of(FeedScopedId id) {
@@ -99,6 +110,11 @@ public class ScheduledDeviatedTrip
   }
 
   @Override
+  public long maxSpanDays() {
+    return maxSpanDays;
+  }
+
+  @Override
   public int numberOfStops() {
     return stopTimes.length;
   }
@@ -136,13 +152,13 @@ public class ScheduledDeviatedTrip
   }
 
   @Override
-  public boolean isBoardingPossible(StopLocation fromStop) {
-    return findBoardIndex(fromStop) != STOP_INDEX_NOT_FOUND;
+  public boolean isBoardingPossible(FeedScopedId fromStopId) {
+    return findBoardIndex(fromStopId) != STOP_INDEX_NOT_FOUND;
   }
 
   @Override
-  public boolean isAlightingPossible(StopLocation toStop) {
-    return findAlightIndex(toStop) != STOP_INDEX_NOT_FOUND;
+  public boolean isAlightingPossible(FeedScopedId toStopId) {
+    return findAlightIndex(toStopId) != STOP_INDEX_NOT_FOUND;
   }
 
   @Override
@@ -161,18 +177,23 @@ public class ScheduledDeviatedTrip
   }
 
   @Override
-  public int findBoardIndex(StopLocation fromStop) {
+  public int findBoardIndex(FeedScopedId fromStopId) {
     for (int i = 0; i < stopTimes.length; i++) {
       if (getBoardRule(i).isNotRoutable()) {
         continue;
       }
       StopLocation stop = stopTimes[i].stop;
       if (stop instanceof GroupStop groupStop) {
-        if (groupStop.getChildLocations().contains(fromStop)) {
+        if (
+          groupStop
+            .getChildLocations()
+            .stream()
+            .anyMatch(childStop -> childStop.getId().equals(fromStopId))
+        ) {
           return i;
         }
       } else {
-        if (stop.equals(fromStop)) {
+        if (stop.getId().equals(fromStopId)) {
           return i;
         }
       }
@@ -181,18 +202,23 @@ public class ScheduledDeviatedTrip
   }
 
   @Override
-  public int findAlightIndex(StopLocation toStop) {
+  public int findAlightIndex(FeedScopedId toStopId) {
     for (int i = stopTimes.length - 1; i >= 0; i--) {
       if (getAlightRule(i).isNotRoutable()) {
         continue;
       }
       StopLocation stop = stopTimes[i].stop;
       if (stop instanceof GroupStop groupStop) {
-        if (groupStop.getChildLocations().contains(toStop)) {
+        if (
+          groupStop
+            .getChildLocations()
+            .stream()
+            .anyMatch(childStop -> childStop.getId().equals(toStopId))
+        ) {
           return i;
         }
       } else {
-        if (stop.equals(toStop)) {
+        if (stop.getId().equals(toStopId)) {
           return i;
         }
       }

@@ -1,18 +1,18 @@
 package org.opentripplanner.graph_builder.module.linking;
 
 import java.util.List;
-import org.opentripplanner.routing.linking.VertexLinker;
 import org.opentripplanner.routing.linking.VertexLinkerTestFactory;
 import org.opentripplanner.street.graph.Graph;
-import org.opentripplanner.street.model.edge.LinkingDirection;
+import org.opentripplanner.street.linking.LinkingDirection;
+import org.opentripplanner.street.linking.VertexLinker;
 import org.opentripplanner.street.model.edge.StreetTransitStopLink;
 import org.opentripplanner.street.model.vertex.TransitStopVertex;
 import org.opentripplanner.street.model.vertex.Vertex;
 import org.opentripplanner.street.search.TraverseMode;
 import org.opentripplanner.street.search.TraverseModeSet;
-import org.opentripplanner.transit.model._data.TimetableRepositoryForTest;
+import org.opentripplanner.transit.model._data.TransitRepositoryForTest;
 import org.opentripplanner.transit.model.site.RegularStop;
-import org.opentripplanner.transit.service.TimetableRepository;
+import org.opentripplanner.transit.service.TransitRepository;
 
 /**
  * Get graphs of Columbus Ohio with real OSM streets and a synthetic transit system for use in
@@ -20,7 +20,7 @@ import org.opentripplanner.transit.service.TimetableRepository;
  */
 class TestGraph {
 
-  private static final TimetableRepositoryForTest TEST_MODEL = TimetableRepositoryForTest.of();
+  private static final TransitRepositoryForTest TEST_MODEL = TransitRepositoryForTest.of();
 
   /**
    * Add a regular grid of stops to the graph. Note! Not all of these stops
@@ -65,8 +65,8 @@ class TestGraph {
   }
 
   /** link the stops in the graph */
-  public static void link(Graph graph, TimetableRepository timetableRepository) {
-    timetableRepository.index();
+  public static void link(Graph graph, TransitRepository transitRepository) {
+    transitRepository.index();
     graph.index();
 
     VertexLinker linker = VertexLinkerTestFactory.of(graph);

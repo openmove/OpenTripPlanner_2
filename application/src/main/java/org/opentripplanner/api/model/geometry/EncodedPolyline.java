@@ -81,7 +81,7 @@ public final class EncodedPolyline {
 
   private void calculateDistance() {
     if (distance_m == NOT_SET) {
-      distance_m = (int) GeometryUtils.sumDistances(geometry.getCoordinates());
+      distance_m = (int) GeometryUtils.sumDistances(geometry);
     }
   }
 }

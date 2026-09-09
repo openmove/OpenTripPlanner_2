@@ -2,10 +2,12 @@ package org.opentripplanner.updater.trip.siri;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.opentripplanner.updater.spi.UpdateResultAssertions.assertFailure;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -17,8 +19,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.opentripplanner.core.model.id.FeedScopedId;
+import org.opentripplanner.core.model.id.FeedScopedIdForTestFactory;
+import org.opentripplanner.model.PickDrop;
 import org.opentripplanner.model.calendar.CalendarServiceData;
-import org.opentripplanner.transit.model._data.TimetableRepositoryForTest;
+import org.opentripplanner.routing.algorithm.raptoradapter.transit.RaptorTransitDataTestFactory;
+import org.opentripplanner.transit.model._data.TransitRepositoryForTest;
 import org.opentripplanner.transit.model.basic.SubMode;
 import org.opentripplanner.transit.model.basic.TransitMode;
 import org.opentripplanner.transit.model.framework.AbstractTransitEntity;
@@ -28,31 +33,32 @@ import org.opentripplanner.transit.model.network.TripPattern;
 import org.opentripplanner.transit.model.organization.Agency;
 import org.opentripplanner.transit.model.organization.Operator;
 import org.opentripplanner.transit.model.site.RegularStop;
-import org.opentripplanner.transit.model.timetable.RealTimeState;
+import org.opentripplanner.transit.model.timetable.RealTimeTripTimes;
 import org.opentripplanner.transit.model.timetable.Trip;
 import org.opentripplanner.transit.model.timetable.TripOnServiceDate;
+import org.opentripplanner.transit.repository.DefaultTimetableRepository;
 import org.opentripplanner.transit.service.DefaultTransitService;
 import org.opentripplanner.transit.service.SiteRepository;
-import org.opentripplanner.transit.service.TimetableRepository;
-import org.opentripplanner.transit.service.TransitEditorService;
+import org.opentripplanner.transit.service.TransitRepository;
+import org.opentripplanner.transit.service.TransitService;
 import org.opentripplanner.updater.alert.siri.mapping.SiriTransportModeMapper;
-import org.opentripplanner.updater.spi.UpdateError;
+import org.opentripplanner.updater.spi.UpdateErrorType;
 import uk.org.siri.siri21.VehicleModesEnumeration;
 
 class AddedTripBuilderTest {
 
-  private static final Agency AGENCY = TimetableRepositoryForTest.AGENCY;
+  private static final Agency AGENCY = TransitRepositoryForTest.AGENCY;
   private static final ZoneId TIME_ZONE = AGENCY.getTimezone();
-  private static final Operator OPERATOR = Operator.of(TimetableRepositoryForTest.id("OPERATOR_ID"))
+  private static final Operator OPERATOR = Operator.of(FeedScopedIdForTestFactory.id("OPERATOR_ID"))
     .withName("OPERATOR_NAME")
     .build();
-  private static final Route REPLACED_ROUTE = TimetableRepositoryForTest.route("REPLACED_ROUTE")
+  private static final Route REPLACED_ROUTE = TransitRepositoryForTest.route("REPLACED_ROUTE")
     .withAgency(AGENCY)
     .withOperator(OPERATOR)
     .build();
   private static final String LINE_REF = "ROUTE_ID";
-  private static final FeedScopedId TRIP_ID = TimetableRepositoryForTest.id("TRIP_ID");
-  private static final FeedScopedId DATED_SERVICE_JOURNEY_ID = TimetableRepositoryForTest.id(
+  private static final FeedScopedId TRIP_ID = FeedScopedIdForTestFactory.id("TRIP_ID");
+  private static final FeedScopedId DATED_SERVICE_JOURNEY_ID = FeedScopedIdForTestFactory.id(
     "DATED_SERVICE_JOURNEY_ID"
   );
   private static final LocalDate SERVICE_DATE = LocalDate.of(2023, 2, 17);
@@ -62,7 +68,7 @@ class AddedTripBuilderTest {
   private static final String HEADSIGN = "TEST TRIP TOWARDS TEST ISLAND";
 
   /* Transit model */
-  private static final TimetableRepositoryForTest MODEL_TEST = TimetableRepositoryForTest.of();
+  private static final TransitRepositoryForTest MODEL_TEST = TransitRepositoryForTest.of();
 
   private static final RegularStop STOP_A = MODEL_TEST.stop("A").build();
   private static final RegularStop STOP_B = MODEL_TEST.stop("B").build();
@@ -76,47 +82,53 @@ class AddedTripBuilderTest {
     .build();
 
   private final Deduplicator DEDUPLICATOR = new Deduplicator();
-  private final TimetableRepository TRANSIT_MODEL = new TimetableRepository(SITE_REPOSITORY);
-  private TransitEditorService transitService;
+  private final TransitRepository TRANSIT_MODEL = new TransitRepository(SITE_REPOSITORY);
+  private TransitService transitService;
   private EntityResolver ENTITY_RESOLVER;
+  private DefaultTimetableRepository timetableRepository;
 
   @BeforeEach
   void setUp() {
     // Add entities to transit model for the entity resolver
     TRANSIT_MODEL.addAgency(AGENCY);
-    final TripPattern pattern = TimetableRepositoryForTest.tripPattern(
+    final TripPattern pattern = TransitRepositoryForTest.tripPattern(
       "REPLACED_ROUTE_PATTERN_ID",
       REPLACED_ROUTE
     )
-      .withStopPattern(TimetableRepositoryForTest.stopPattern(STOP_A, STOP_B))
+      .withStopPattern(TransitRepositoryForTest.stopPattern(STOP_A, STOP_B))
       .build();
     TRANSIT_MODEL.addTripPattern(pattern.getId(), pattern);
 
     // Crate a scheduled calendar, to have the SERVICE_DATE be within the transit feed coverage
     CalendarServiceData calendarServiceData = new CalendarServiceData();
-    var cal_id = TimetableRepositoryForTest.id("CAL_1");
+    var cal_id = FeedScopedIdForTestFactory.id("CAL_1");
     calendarServiceData.putServiceDatesForServiceId(
       cal_id,
       List.of(SERVICE_DATE.minusDays(1), SERVICE_DATE, SERVICE_DATE.plusDays(1))
     );
-    TRANSIT_MODEL.getServiceCodes().put(cal_id, 0);
+    TRANSIT_MODEL.putServiceCode(cal_id, 0);
     TRANSIT_MODEL.updateCalendarServiceData(calendarServiceData);
 
     // Create transit model index
     TRANSIT_MODEL.index();
-    transitService = new DefaultTransitService(TRANSIT_MODEL);
+    timetableRepository = new DefaultTimetableRepository(
+      RaptorTransitDataTestFactory.empty(),
+      TRANSIT_MODEL.getTripCalendar()
+    );
+    transitService = new DefaultTransitService(TRANSIT_MODEL, timetableRepository);
 
     // Create the entity resolver only after the model has been indexed
     ENTITY_RESOLVER = new EntityResolver(
-      new DefaultTransitService(TRANSIT_MODEL),
-      TimetableRepositoryForTest.FEED_ID
+      new DefaultTransitService(TRANSIT_MODEL, timetableRepository),
+      TransitRepositoryForTest.FEED_ID
     );
   }
 
   @Test
   void testAddedTrip() {
-    var addedTrip = new AddedTripBuilder(
+    var tripUpdate = new AddedTripBuilder(
       transitService,
+      timetableRepository,
       DEDUPLICATOR,
       ENTITY_RESOLVER,
       AbstractTransitEntity::getId,
@@ -135,12 +147,10 @@ class AddedTripBuilderTest {
       SHORT_NAME,
       HEADSIGN,
       List.of(),
-      "DATASOURCE"
+      "DATASOURCE",
+      null
     ).build();
 
-    assertTrue(addedTrip.isSuccess(), "Trip creation should succeed");
-
-    TripUpdate tripUpdate = addedTrip.successValue();
     // Assert trip
     Trip trip = tripUpdate.tripTimes().getTrip();
     assertEquals(TRIP_ID, trip.getId(), "Trip should be mapped");
@@ -170,11 +180,12 @@ class AddedTripBuilderTest {
     assertTrue(
       transitService
         .getServiceCodesRunningForDate(SERVICE_DATE)
-        .contains(TRANSIT_MODEL.getServiceCodes().get(trip.getServiceId())),
+        .contains(timetableRepository.getTripCalendars().getServiceCode(trip.getServiceId())),
       "serviceId should be running on service date"
     );
     TripOnServiceDate tripOnServiceDate = tripUpdate.addedTripOnServiceDate();
     assertNotNull(tripOnServiceDate, "The TripUpdate should contain a new TripOnServiceDate");
+    assertTrue(tripOnServiceDate.isExtraJourney(), "The trip should be marked as extra journey");
 
     // Assert stop pattern
     var stopPattern = tripUpdate.stopPattern();
@@ -184,12 +195,19 @@ class AddedTripBuilderTest {
     assertEquals(STOP_B, stopPattern.getStop(1));
     assertEquals(STOP_C, stopPattern.getStop(2));
 
+    // Assert pickup/dropoff defaults: no alighting at first stop, no boarding at last stop
+    assertEquals(PickDrop.SCHEDULED, pattern.getBoardType(0), "Can board at first stop");
+    assertEquals(PickDrop.NONE, pattern.getAlightType(0), "Cannot alight at first stop");
+    assertEquals(PickDrop.SCHEDULED, pattern.getBoardType(1), "Can board at middle stop");
+    assertEquals(PickDrop.SCHEDULED, pattern.getAlightType(1), "Can alight at middle stop");
+    assertEquals(PickDrop.NONE, pattern.getBoardType(2), "Cannot board at last stop");
+    assertEquals(PickDrop.SCHEDULED, pattern.getAlightType(2), "Can alight at last stop");
+
     // Assert scheduled timetable
     var scheduledTimes = pattern.getScheduledTimetable().getTripTimes(trip);
     assertNotNull(scheduledTimes);
     // TODO - is this correct?
-    assertEquals(RealTimeState.SCHEDULED, scheduledTimes.getRealTimeState());
-    assertTrue(scheduledTimes.isScheduled());
+    assertFalse(scheduledTimes.hasAnyUpdates());
     assertEquals(secondsInDay(10, 20), scheduledTimes.getArrivalTime(0));
     assertEquals(secondsInDay(10, 20), scheduledTimes.getDepartureTime(0));
     assertEquals(0, scheduledTimes.getDepartureDelay(0));
@@ -207,8 +225,8 @@ class AddedTripBuilderTest {
     // Assert updated trip times
     var times = tripUpdate.tripTimes();
     assertEquals(trip, times.getTrip());
-    assertEquals(RealTimeState.ADDED, times.getRealTimeState());
-    assertFalse(times.isScheduled());
+    assertTrue(times.isAdded());
+    assertTrue(times.hasAnyUpdates());
     assertEquals(secondsInDay(10, 19), times.getArrivalTime(0));
     assertEquals(secondsInDay(10, 19), times.getDepartureTime(0));
     assertEquals(-60, times.getDepartureDelay(0));
@@ -232,6 +250,7 @@ class AddedTripBuilderTest {
   void testAddedTripOnAddedRoute() {
     var firstAddedTrip = new AddedTripBuilder(
       transitService,
+      timetableRepository,
       DEDUPLICATOR,
       ENTITY_RESOLVER,
       AbstractTransitEntity::getId,
@@ -250,19 +269,20 @@ class AddedTripBuilderTest {
       SHORT_NAME,
       HEADSIGN,
       List.of(),
-      "DATASOURCE"
+      "DATASOURCE",
+      null
     ).build();
 
-    assertTrue(firstAddedTrip.isSuccess(), "Trip creation should succeed");
-    assertTrue(firstAddedTrip.successValue().routeCreation());
+    assertTrue(firstAddedTrip.routeCreation());
 
-    var firstTrip = firstAddedTrip.successValue().tripTimes().getTrip();
+    var firstTrip = firstAddedTrip.tripTimes().getTrip();
 
-    var tripId2 = TimetableRepositoryForTest.id("TRIP_ID_2");
-    var datedServiceJourneyId2 = TimetableRepositoryForTest.id("DATED_SERVICE_JOURNEY_ID_2");
+    var tripId2 = FeedScopedIdForTestFactory.id("TRIP_ID_2");
+    var datedServiceJourneyId2 = FeedScopedIdForTestFactory.id("DATED_SERVICE_JOURNEY_ID_2");
 
     var secondAddedTrip = new AddedTripBuilder(
       transitService,
+      timetableRepository,
       DEDUPLICATOR,
       ENTITY_RESOLVER,
       AbstractTransitEntity::getId,
@@ -281,20 +301,19 @@ class AddedTripBuilderTest {
       SHORT_NAME,
       HEADSIGN,
       List.of(),
-      "DATASOURCE"
+      "DATASOURCE",
+      null
     ).build();
 
-    assertTrue(secondAddedTrip.isSuccess(), "Trip creation should succeed");
-
     // Assert trip
-    Trip secondTrip = secondAddedTrip.successValue().tripTimes().getTrip();
+    Trip secondTrip = secondAddedTrip.tripTimes().getTrip();
     assertEquals(tripId2, secondTrip.getId(), "Trip should be mapped");
     assertNotEquals(firstTrip, secondTrip);
 
     // Assert trip times
-    var times = secondAddedTrip.successValue().tripTimes();
+    var times = secondAddedTrip.tripTimes();
     assertEquals(secondTrip, times.getTrip());
-    assertEquals(RealTimeState.ADDED, times.getRealTimeState());
+    assertTrue(times.isAdded());
     assertEquals(secondsInDay(11, 19), times.getArrivalTime(0));
     assertEquals(secondsInDay(11, 19), times.getDepartureTime(0));
     assertEquals(secondsInDay(11, 29), times.getArrivalTime(1));
@@ -307,6 +326,7 @@ class AddedTripBuilderTest {
   void testAddedTripOnExistingRoute() {
     var addedTrip = new AddedTripBuilder(
       transitService,
+      timetableRepository,
       DEDUPLICATOR,
       ENTITY_RESOLVER,
       AbstractTransitEntity::getId,
@@ -325,24 +345,24 @@ class AddedTripBuilderTest {
       SHORT_NAME,
       HEADSIGN,
       List.of(),
-      "DATASOURCE"
+      "DATASOURCE",
+      null
     ).build();
 
-    assertTrue(addedTrip.isSuccess(), "Trip creation should succeed");
-
     // Assert trip
-    Trip trip = addedTrip.successValue().tripTimes().getTrip();
+    Trip trip = addedTrip.tripTimes().getTrip();
     assertEquals(TRIP_ID, trip.getId(), "Trip should be mapped");
     assertSame(REPLACED_ROUTE, trip.getRoute());
 
     // Assert route
-    assertFalse(addedTrip.successValue().routeCreation(), "The existing route should be reused");
+    assertFalse(addedTrip.routeCreation(), "The existing route should be reused");
   }
 
   @Test
   void testAddedTripWithoutReplacedRoute() {
     var addedTrip = new AddedTripBuilder(
       transitService,
+      timetableRepository,
       DEDUPLICATOR,
       ENTITY_RESOLVER,
       AbstractTransitEntity::getId,
@@ -361,17 +381,16 @@ class AddedTripBuilderTest {
       SHORT_NAME,
       HEADSIGN,
       List.of(),
-      "DATASOURCE"
+      "DATASOURCE",
+      null
     ).build();
 
-    assertTrue(addedTrip.isSuccess(), "Trip creation should succeed");
-
     // Assert trip
-    Trip trip = addedTrip.successValue().tripTimes().getTrip();
+    Trip trip = addedTrip.tripTimes().getTrip();
     assertEquals(TRIP_ID, trip.getId(), "Trip should be mapped");
 
     // Assert route
-    assertTrue(addedTrip.successValue().routeCreation(), "A new route should be created");
+    assertTrue(addedTrip.routeCreation(), "A new route should be created");
     Route route = trip.getRoute();
     assertEquals(LINE_REF, route.getId().getId(), "route should be mapped");
     assertEquals(AGENCY, route.getAgency(), "Agency should be taken from replaced route");
@@ -389,6 +408,7 @@ class AddedTripBuilderTest {
   void testAddedTripFailOnMissingServiceId() {
     var addedTrip = new AddedTripBuilder(
       transitService,
+      timetableRepository,
       DEDUPLICATOR,
       ENTITY_RESOLVER,
       AbstractTransitEntity::getId,
@@ -407,13 +427,13 @@ class AddedTripBuilderTest {
       SHORT_NAME,
       HEADSIGN,
       List.of(),
-      "DATASOURCE"
-    ).build();
+      "DATASOURCE",
+      null
+    );
 
-    assertTrue(addedTrip.isFailure(), "Trip creation should fail");
-    assertEquals(
-      UpdateError.UpdateErrorType.NO_START_DATE,
-      addedTrip.failureValue().errorType(),
+    assertFailure(
+      UpdateErrorType.NO_START_DATE,
+      addedTrip::build,
       "Trip creation should fail without start date"
     );
   }
@@ -443,6 +463,7 @@ class AddedTripBuilderTest {
 
     var addedTrip = new AddedTripBuilder(
       transitService,
+      timetableRepository,
       DEDUPLICATOR,
       ENTITY_RESOLVER,
       AbstractTransitEntity::getId,
@@ -461,13 +482,13 @@ class AddedTripBuilderTest {
       SHORT_NAME,
       HEADSIGN,
       List.of(),
-      "DATASOURCE"
-    ).build();
+      "DATASOURCE",
+      null
+    );
 
-    assertTrue(addedTrip.isFailure(), "Trip creation should fail");
-    assertEquals(
-      UpdateError.UpdateErrorType.NEGATIVE_DWELL_TIME,
-      addedTrip.failureValue().errorType(),
+    assertFailure(
+      UpdateErrorType.NEGATIVE_DWELL_TIME,
+      addedTrip::build,
       "Trip creation should fail with invalid dwell time"
     );
   }
@@ -483,6 +504,7 @@ class AddedTripBuilderTest {
     );
     var addedTrip = new AddedTripBuilder(
       transitService,
+      timetableRepository,
       DEDUPLICATOR,
       ENTITY_RESOLVER,
       AbstractTransitEntity::getId,
@@ -501,13 +523,12 @@ class AddedTripBuilderTest {
       SHORT_NAME,
       HEADSIGN,
       List.of(),
-      "DATASOURCE"
-    ).build();
-
-    assertTrue(addedTrip.isFailure(), "Trip creation should fail");
-    assertEquals(
-      UpdateError.UpdateErrorType.TOO_FEW_STOPS,
-      addedTrip.failureValue().errorType(),
+      "DATASOURCE",
+      null
+    );
+    assertFailure(
+      UpdateErrorType.TOO_FEW_STOPS,
+      addedTrip::build,
       "Trip creation should fail with too few calls"
     );
   }
@@ -530,6 +551,7 @@ class AddedTripBuilderTest {
     );
     var addedTrip = new AddedTripBuilder(
       transitService,
+      timetableRepository,
       DEDUPLICATOR,
       ENTITY_RESOLVER,
       AbstractTransitEntity::getId,
@@ -548,26 +570,24 @@ class AddedTripBuilderTest {
       SHORT_NAME,
       HEADSIGN,
       List.of(),
-      "DATASOURCE"
-    ).build();
+      "DATASOURCE",
+      null
+    );
 
-    assertTrue(addedTrip.isFailure(), "Trip creation should fail");
-    assertEquals(
-      UpdateError.UpdateErrorType.UNKNOWN_STOP,
-      addedTrip.failureValue().errorType(),
+    assertFailure(
+      UpdateErrorType.UNKNOWN_STOP,
+      addedTrip::build,
       "Trip creation should fail with call referring to unknown stop"
     );
   }
 
   @ParameterizedTest
-  @CsvSource(
-    {
-      "air,AIRPLANE,AIRPLANE,",
-      "bus,BUS,RAIL,railReplacementBus",
-      "rail,RAIL,RAIL,replacementRailService",
-      "ferry,FERRY,RAIL,",
-    }
-  )
+  @CsvSource({
+    "air,AIRPLANE,AIRPLANE,",
+    "bus,BUS,RAIL,railReplacementBus",
+    "rail,RAIL,RAIL,replacementRailService",
+    "ferry,FERRY,RAIL,",
+  })
   void testGetTransportMode(
     String siriMode,
     String internalMode,
@@ -575,7 +595,7 @@ class AddedTripBuilderTest {
     String subMode
   ) {
     // Arrange
-    var route = Route.of(TimetableRepositoryForTest.id(LINE_REF))
+    var route = Route.of(FeedScopedIdForTestFactory.id(LINE_REF))
       .withShortName(SHORT_NAME)
       .withAgency(AGENCY)
       .withMode(TransitMode.valueOf(replacedRouteMode))
@@ -590,6 +610,69 @@ class AddedTripBuilderTest {
     var expectedMode = TransitMode.valueOf(internalMode);
     assertEquals(expectedMode, transitMode, "Mode not mapped to correct internal mode");
     assertEquals(subMode, transitSubMode, "Mode not mapped to correct sub mode");
+  }
+
+  @Test
+  void vehicleRefIsSetOnTripTimes() {
+    var tripUpdate = new AddedTripBuilder(
+      transitService,
+      timetableRepository,
+      DEDUPLICATOR,
+      ENTITY_RESOLVER,
+      AbstractTransitEntity::getId,
+      TRIP_ID,
+      DATED_SERVICE_JOURNEY_ID,
+      OPERATOR,
+      LINE_REF,
+      REPLACED_ROUTE,
+      SERVICE_DATE,
+      TRANSIT_MODE,
+      SUB_MODE,
+      getCalls(10),
+      false,
+      null,
+      false,
+      SHORT_NAME,
+      HEADSIGN,
+      List.of(),
+      "DATASOURCE",
+      "BUS-42"
+    ).build();
+
+    var realTimeTimes = assertInstanceOf(RealTimeTripTimes.class, tripUpdate.tripTimes());
+    assertTrue(realTimeTimes.getVehicleId().isPresent());
+    assertEquals("BUS-42", realTimeTimes.getVehicleId().get());
+  }
+
+  @Test
+  void vehicleRefIsNullWhenAbsent() {
+    var tripUpdate = new AddedTripBuilder(
+      transitService,
+      timetableRepository,
+      DEDUPLICATOR,
+      ENTITY_RESOLVER,
+      AbstractTransitEntity::getId,
+      TRIP_ID,
+      DATED_SERVICE_JOURNEY_ID,
+      OPERATOR,
+      LINE_REF,
+      REPLACED_ROUTE,
+      SERVICE_DATE,
+      TRANSIT_MODE,
+      SUB_MODE,
+      getCalls(10),
+      false,
+      null,
+      false,
+      SHORT_NAME,
+      HEADSIGN,
+      List.of(),
+      "DATASOURCE",
+      null
+    ).build();
+
+    var realTimeTimes = assertInstanceOf(RealTimeTripTimes.class, tripUpdate.tripTimes());
+    assertTrue(realTimeTimes.getVehicleId().isEmpty());
   }
 
   private static List<CallWrapper> getCalls(int hour) {

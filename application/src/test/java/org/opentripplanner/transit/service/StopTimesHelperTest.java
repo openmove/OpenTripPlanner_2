@@ -16,6 +16,8 @@ import org.opentripplanner.TestOtpModel;
 import org.opentripplanner.core.model.id.FeedScopedId;
 import org.opentripplanner.model.StopTimesInPattern;
 import org.opentripplanner.model.TripTimeOnDate;
+import org.opentripplanner.transit.api.request.CancellationPolicy;
+import org.opentripplanner.transit.api.request.TripTimeOnDateRequest;
 import org.opentripplanner.transit.model.network.TripPattern;
 
 class StopTimesHelperTest {
@@ -31,24 +33,24 @@ class StopTimesHelperTest {
   @BeforeAll
   public static void setUp() throws Exception {
     TestOtpModel model = ConstantsForTests.buildGtfsGraph(ConstantsForTests.SIMPLE_GTFS);
-    TimetableRepository timetableRepository = model.timetableRepository();
-    transitService = new DefaultTransitService(timetableRepository);
-    feedId = timetableRepository.getFeedIds().iterator().next();
+    TransitRepository transitRepository = model.transitRepository();
+    transitService = new DefaultTransitService(transitRepository);
+    feedId = transitRepository.getFeedIds().iterator().next();
     stopId = new FeedScopedId(feedId, "J");
     var originalPattern = transitService.findPattern(
       transitService.getTrip(new FeedScopedId(feedId, "5.1"))
     );
     var tt = originalPattern.getScheduledTimetable();
     var newTripTimes = tt.getTripTimes().getFirst().createRealTimeFromScheduledTimes();
-    newTripTimes.cancelTrip();
+    newTripTimes.withCanceled();
     pattern = originalPattern
       .copy()
       .withScheduledTimeTableBuilder(builder -> builder.addOrUpdateTripTimes(newTripTimes.build()))
       .build();
     // replace the original pattern by the updated pattern in the transit model
-    timetableRepository.addTripPattern(pattern.getId(), pattern);
-    timetableRepository.index();
-    transitService = new DefaultTransitService(timetableRepository);
+    transitRepository.addTripPattern(pattern.getId(), pattern);
+    transitRepository.index();
+    transitService = new DefaultTransitService(transitRepository);
     stopTimesHelper = new StopTimesHelper(transitService);
   }
 
@@ -64,7 +66,8 @@ class StopTimesHelperTest {
       0,
       ArrivalDeparture.BOTH,
       true,
-      SORT_ORDER
+      SORT_ORDER,
+      null
     );
 
     assertTrue(result.isEmpty());
@@ -82,7 +85,8 @@ class StopTimesHelperTest {
       1,
       ArrivalDeparture.BOTH,
       true,
-      SORT_ORDER
+      SORT_ORDER,
+      null
     );
 
     assertEquals(
@@ -123,7 +127,8 @@ class StopTimesHelperTest {
       10,
       ArrivalDeparture.BOTH,
       true,
-      SORT_ORDER
+      SORT_ORDER,
+      null
     );
 
     assertEquals(
@@ -145,7 +150,8 @@ class StopTimesHelperTest {
       10,
       ArrivalDeparture.BOTH,
       false,
-      SORT_ORDER
+      SORT_ORDER,
+      null
     );
 
     assertEquals(
@@ -170,7 +176,8 @@ class StopTimesHelperTest {
       2,
       ArrivalDeparture.BOTH,
       true,
-      SORT_ORDER
+      SORT_ORDER,
+      null
     );
 
     assertEquals(
@@ -194,7 +201,8 @@ class StopTimesHelperTest {
       10,
       ArrivalDeparture.BOTH,
       true,
-      SORT_ORDER
+      SORT_ORDER,
+      null
     );
 
     assertEquals(
@@ -343,6 +351,21 @@ class StopTimesHelperTest {
     assertEquals((8 * 60 + 10) * 60, stopTime.getScheduledArrival());
     assertEquals((8 * 60 + 10) * 60, stopTime.getScheduledDeparture());
     assertEquals(SERVICE_DATE, stopTime.getServiceDay());
+  }
+
+  @Test
+  void findTripTimesOnDate_allDepartures() {
+    var stop = transitService.getRegularStop(stopId);
+    var request = TripTimeOnDateRequest.of(List.of(stop))
+      .withTime(SERVICE_DATE.atStartOfDay(transitService.getTimeZone()).toInstant())
+      .withTimeWindow(Duration.ofHours(24))
+      .withNumberOfDepartures(10)
+      .withCancellationPolicy(CancellationPolicy.INCLUDE_CANCELLATIONS)
+      .build();
+
+    var result = stopTimesHelper.findTripTimesOnDate(request);
+
+    assertEquals(5, result.size());
   }
 
   boolean hasCancelledTrips(List<StopTimesInPattern> stopTimes) {

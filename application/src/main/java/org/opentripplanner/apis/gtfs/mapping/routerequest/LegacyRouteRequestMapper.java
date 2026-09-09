@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
 import org.opentripplanner.api.common.LocationStringParser;
 import org.opentripplanner.api.parameter.QualifiedMode;
 import org.opentripplanner.api.parameter.QualifiedModeSet;
-import org.opentripplanner.apis.gtfs.GraphQLRequestContext;
+import org.opentripplanner.apis.gtfs.GtfsGraphQLRequestContext;
 import org.opentripplanner.apis.gtfs.generated.GraphQLTypes;
 import org.opentripplanner.core.model.id.FeedScopedId;
 import org.opentripplanner.framework.graphql.GraphQLUtils;
@@ -38,17 +38,17 @@ public class LegacyRouteRequestMapper {
 
   public static RouteRequest toRouteRequest(
     DataFetchingEnvironment environment,
-    GraphQLRequestContext context
+    GtfsGraphQLRequestContext context
   ) {
     var request = context.defaultRouteRequest().copyOf();
 
     CallerWithEnvironment callWith = new CallerWithEnvironment(environment);
 
     callWith.argument("fromPlace", (String from) ->
-      request.withFrom(LocationStringParser.fromOldStyleString(from))
+      LocationStringParser.fromOldStyleString(from).ifPresent(request::withFrom)
     );
     callWith.argument("toPlace", (String to) ->
-      request.withTo(LocationStringParser.fromOldStyleString(to))
+      LocationStringParser.fromOldStyleString(to).ifPresent(request::withTo)
     );
 
     callWith.argument("from", (Map<String, Object> v) -> request.withFrom(toGenericLocation(v)));
@@ -146,6 +146,7 @@ public class LegacyRouteRequestMapper {
         );
         callWith.argument("unpreferred.unpreferredCost", tr::withUnpreferredCostString);
         callWith.argument("ignoreRealtimeUpdates", tr::withIgnoreRealtimeUpdates);
+        callWith.argument("omitCanceled", (Boolean b) -> tr.withIncludeRealtimeCancellations(!b));
         callWith.argument("modeWeight", (Map<String, Object> modeWeights) ->
           tr.withReluctanceForMode(
             modeWeights
@@ -186,17 +187,19 @@ public class LegacyRouteRequestMapper {
         if (hasArgument(environment, "banned") || hasArgument(environment, "transportModes")) {
           var filterRequestBuilder = TransitFilterRequest.of();
 
-          callWith.argument("banned.routes", (String v) ->
-            filterRequestBuilder.addNot(
-              SelectRequest.of().withRoutes(FeedScopedId.parseList(v)).build()
-            )
-          );
+          callWith.argument("banned.routes", (String v) -> {
+            var bannedRoutes = FeedScopedId.parseList(v);
+            if (!bannedRoutes.isEmpty()) {
+              filterRequestBuilder.addNot(SelectRequest.of().withRoutes(bannedRoutes).build());
+            }
+          });
 
-          callWith.argument("banned.agencies", (String v) ->
-            filterRequestBuilder.addNot(
-              SelectRequest.of().withAgencies(FeedScopedId.parseList(v)).build()
-            )
-          );
+          callWith.argument("banned.agencies", (String v) -> {
+            var bannedAgencies = FeedScopedId.parseList(v);
+            if (!bannedAgencies.isEmpty()) {
+              filterRequestBuilder.addNot(SelectRequest.of().withAgencies(bannedAgencies).build());
+            }
+          });
 
           callWith.argument("banned.trips", (String v) ->
             transitBuilder.withBannedTrips(FeedScopedId.parseList(v))
@@ -237,11 +240,6 @@ public class LegacyRouteRequestMapper {
       });
     });
 
-    if (hasArgument(environment, "allowedTicketTypes")) {
-      // request.allowedFares = new HashSet();
-      // ((List<String>)environment.getArgument("allowedTicketTypes")).forEach(ticketType -> request.allowedFares.add(ticketType.replaceFirst("_", ":")));
-    }
-
     return request.buildRequest();
   }
 
@@ -265,7 +263,7 @@ public class LegacyRouteRequestMapper {
     String address = (String) m.get("address");
 
     if (address != null) {
-      return new GenericLocation(address, null, lat, lng);
+      return GenericLocation.fromCoordinate(lat, lng, address);
     }
 
     return GenericLocation.fromCoordinate(lat, lng);

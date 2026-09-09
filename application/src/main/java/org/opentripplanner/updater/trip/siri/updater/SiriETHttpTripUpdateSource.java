@@ -8,8 +8,8 @@ import java.time.ZonedDateTime;
 import java.util.Optional;
 import java.util.UUID;
 import javax.annotation.Nullable;
+import org.opentripplanner.framework.io.HttpHeaders;
 import org.opentripplanner.framework.io.OtpHttpClientException;
-import org.opentripplanner.updater.spi.HttpHeaders;
 import org.opentripplanner.updater.support.siri.SiriLoader;
 import org.opentripplanner.updater.trip.UpdateIncrementality;
 import org.opentripplanner.utils.tostring.ToStringBuilder;
@@ -35,9 +35,10 @@ public class SiriETHttpTripUpdateSource implements EstimatedTimetableSource {
   public SiriETHttpTripUpdateSource(Parameters parameters, SiriLoader siriLoader) {
     this.url = parameters.url();
 
-    this.requestorRef = parameters.requestorRef() == null || parameters.requestorRef().isEmpty()
-      ? "otp-" + UUID.randomUUID()
-      : parameters.requestorRef();
+    this.requestorRef =
+      parameters.requestorRef() == null || parameters.requestorRef().isEmpty()
+        ? "otp-" + UUID.randomUUID()
+        : parameters.requestorRef();
 
     this.siriLoader = siriLoader;
   }
@@ -62,10 +63,10 @@ public class SiriETHttpTripUpdateSource implements EstimatedTimetableSource {
       updateIncrementality = DIFFERENTIAL;
       return siri;
     } catch (OtpHttpClientException e) {
-      LOG.info("Failed after {} ms", (System.currentTimeMillis() - t1));
+      LOG.info("Failed after {} ms", System.currentTimeMillis() - t1);
       LOG.warn("Could not get SIRI-ET data from {}", url, e);
     } catch (Exception e) {
-      LOG.info("Failed after {} ms", (System.currentTimeMillis() - t1));
+      LOG.info("Failed after {} ms", System.currentTimeMillis() - t1);
       LOG.warn("Failed to parse SIRI-ET feed from {}", url, e);
     }
     return Optional.empty();

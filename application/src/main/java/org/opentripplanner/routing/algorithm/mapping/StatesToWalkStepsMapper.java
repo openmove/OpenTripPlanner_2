@@ -11,7 +11,7 @@ import javax.annotation.Nullable;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
 import org.opentripplanner.core.model.i18n.I18NString;
-import org.opentripplanner.model.plan.leg.ElevationProfile;
+import org.opentripplanner.core.model.i18n.LocalizedString;
 import org.opentripplanner.model.plan.walkstep.RelativeDirection;
 import org.opentripplanner.model.plan.walkstep.WalkStep;
 import org.opentripplanner.model.plan.walkstep.WalkStepBuilder;
@@ -19,11 +19,9 @@ import org.opentripplanner.model.plan.walkstep.verticaltransportation.ElevatorUs
 import org.opentripplanner.model.plan.walkstep.verticaltransportation.EscalatorUse;
 import org.opentripplanner.model.plan.walkstep.verticaltransportation.StairsUse;
 import org.opentripplanner.model.plan.walkstep.verticaltransportation.VerticalTransportationUseFactory;
-import org.opentripplanner.routing.graphfinder.EntranceResolver;
 import org.opentripplanner.service.streetdetails.StreetDetailsService;
 import org.opentripplanner.street.geometry.DirectionUtils;
 import org.opentripplanner.street.geometry.WgsCoordinate;
-import org.opentripplanner.street.internal.notes.StreetNotesService;
 import org.opentripplanner.street.model.edge.AreaEdge;
 import org.opentripplanner.street.model.edge.Edge;
 import org.opentripplanner.street.model.edge.ElevatorAlightEdge;
@@ -32,11 +30,13 @@ import org.opentripplanner.street.model.edge.FreeEdge;
 import org.opentripplanner.street.model.edge.PathwayEdge;
 import org.opentripplanner.street.model.edge.StreetEdge;
 import org.opentripplanner.street.model.edge.StreetTransitEntranceLink;
+import org.opentripplanner.street.model.elevation.ElevationProfile;
 import org.opentripplanner.street.model.vertex.ExitVertex;
 import org.opentripplanner.street.model.vertex.StationEntranceVertex;
 import org.opentripplanner.street.model.vertex.Vertex;
 import org.opentripplanner.street.search.TraverseMode;
 import org.opentripplanner.street.search.state.State;
+import org.opentripplanner.transit.EntranceResolver;
 import org.opentripplanner.transit.model.site.Entrance;
 
 /**
@@ -49,9 +49,11 @@ public class StatesToWalkStepsMapper {
    * walk step. See {@link StatesToWalkStepsMapper#removeZag(WalkStepBuilder, WalkStepBuilder)}
    */
   private static final double MAX_ZAG_DISTANCE = 30;
+  private static final LocalizedString STATION_ENTRANCE_NAME = new LocalizedString(
+    "name.station_entrance"
+  );
 
   private final double ellipsoidToGeoidDifference;
-  private final StreetNotesService streetNotesService;
   private final VerticalTransportationUseFactory verticalTransportationUseFactory;
 
   private final List<State> states;
@@ -82,14 +84,12 @@ public class StatesToWalkStepsMapper {
   public StatesToWalkStepsMapper(
     List<State> states,
     WalkStep previousStep,
-    StreetNotesService streetNotesService,
     StreetDetailsService streetDetailsService,
     EntranceResolver entranceResolver,
     double ellipsoidToGeoidDifference
   ) {
     this.states = states;
     this.previous = previousStep;
-    this.streetNotesService = streetNotesService;
     this.entranceResolver = entranceResolver;
     this.ellipsoidToGeoidDifference = ellipsoidToGeoidDifference;
     this.verticalTransportationUseFactory = new VerticalTransportationUseFactory(
@@ -112,6 +112,13 @@ public class StatesToWalkStepsMapper {
   public List<WalkStep> generateWalkSteps() {
     for (int i = 0; i < states.size() - 1; i++) {
       processState(states.get(i), states.get(i + 1));
+    }
+    if (states.getLast().getVertex() instanceof StationEntranceVertex stationEntranceVertex) {
+      createAndSaveStationEntranceWalkStep(
+        states.get(states.size() - 2),
+        states.get(states.size() - 1),
+        stationEntranceVertex
+      );
     }
 
     return steps.stream().map(WalkStepBuilder::build).toList();
@@ -144,7 +151,7 @@ public class StatesToWalkStepsMapper {
   }
 
   private static boolean isLink(Edge edge) {
-    return (edge instanceof StreetEdge streetEdge && streetEdge.isLink());
+    return edge instanceof StreetEdge streetEdge && streetEdge.isLink();
   }
 
   private static ElevationProfile encodeElevationProfile(
@@ -186,6 +193,11 @@ public class StatesToWalkStepsMapper {
       return;
     }
 
+    if (backState.getVertex() instanceof StationEntranceVertex stationEntranceVertex) {
+      createAndSaveStationEntranceWalkStep(backState, forwardState, stationEntranceVertex);
+      // Do not return.
+    }
+
     // generate a step for getting off an elevator (all elevator narrative generation occurs
     // when alighting). We don't need to know what came before or will come after
     if (edge instanceof ElevatorAlightEdge elevatorAlightEdge) {
@@ -196,9 +208,6 @@ public class StatesToWalkStepsMapper {
       return;
     } else if (edge instanceof StreetEdge streetEdge && streetEdge.isStairs()) {
       createAndSaveStairsWalkStep(backState, forwardState, edge, geom);
-      return;
-    } else if (backState.getVertex() instanceof StationEntranceVertex stationEntranceVertex) {
-      createAndSaveStationEntranceWalkStep(backState, forwardState, stationEntranceVertex);
       return;
     } else if (edge instanceof PathwayEdge pwe && pwe.signpostedAs().isPresent()) {
       createAndSaveStep(
@@ -224,8 +233,7 @@ public class StatesToWalkStepsMapper {
       modeTransition ||
       !continueOnSameStreet(edge, streetNameNoParens) ||
       // went on to or off of a roundabout
-      edge.isRoundabout() !=
-      (roundaboutExit > 0) ||
+      edge.isRoundabout() != roundaboutExit > 0 ||
       (isLink(edge) && !isLink(backState.getBackEdge()))
     ) {
       // Street name has changed, or we've gone on to or off of a roundabout.
@@ -316,9 +324,7 @@ public class StatesToWalkStepsMapper {
     }
 
     // increment the total length for this step
-    current
-      .addDistance(edge.getDistanceMeters())
-      .addStreetNotes(streetNotesService.getNotes(forwardState));
+    current.addDistance(edge.getDistanceMeters());
     lastAngle = DirectionUtils.getLastAngle(geom);
 
     current.addEdge(edge);
@@ -493,7 +499,7 @@ public class StatesToWalkStepsMapper {
   private boolean continueOnSameStreet(Edge edge, String streetNameNoParens) {
     return !(
       current.directionText().toString() != null &&
-      !(java.util.Objects.equals(current.directionTextNoParens(), streetNameNoParens)) &&
+      !java.util.Objects.equals(current.directionTextNoParens(), streetNameNoParens) &&
       (!current.nameIsDerived() || !edge.nameIsDerived())
     );
   }
@@ -627,6 +633,8 @@ public class StatesToWalkStepsMapper {
         // station, since the doors might be between or inside stations.
         .withRelativeDirection(RelativeDirection.ENTER_OR_EXIT_STATION)
         .withEntrance(getEntrance(vertex))
+        .withDirectionText(STATION_ENTRANCE_NAME)
+        .withNameIsDerived(true)
     );
   }
 
@@ -678,7 +686,6 @@ public class StatesToWalkStepsMapper {
           0,
           forwardState.getRequest().geoidElevation() ? -ellipsoidToGeoidDifference : 0
         )
-      )
-      .addStreetNotes(streetNotesService.getNotes(forwardState));
+      );
   }
 }

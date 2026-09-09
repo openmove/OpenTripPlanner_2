@@ -33,7 +33,7 @@ import org.opentripplanner.street.model.vertex.StreetVertex;
 import org.opentripplanner.street.model.vertex.TransitStopVertex;
 import org.opentripplanner.street.search.TraverseMode;
 import org.opentripplanner.street.search.request.StreetSearchRequest;
-import org.opentripplanner.transit.model._data.TimetableRepositoryForTest;
+import org.opentripplanner.transit.model._data.TransitRepositoryForTest;
 import org.opentripplanner.transit.model.site.RegularStop;
 
 /**
@@ -41,7 +41,7 @@ import org.opentripplanner.transit.model.site.RegularStop;
  */
 public class TestStateBuilder {
 
-  private final TimetableRepositoryForTest testModel = TimetableRepositoryForTest.of();
+  private final TransitRepositoryForTest testModel = TransitRepositoryForTest.of();
 
   private static final Instant DEFAULT_START_TIME = OffsetDateTime.parse(
     "2023-04-18T12:00:00+02:00"
@@ -73,7 +73,7 @@ public class TestStateBuilder {
   }
 
   /**
-   * Create an initial state that start in a car.
+   * Create an initial state that starts in a car.
    */
   public static TestStateBuilder ofDriving() {
     return new TestStateBuilder(StreetMode.CAR);
@@ -155,7 +155,7 @@ public class TestStateBuilder {
     count++;
     var from = (StreetVertex) currentState.vertex;
     var to = StreetModelForTest.intersectionVertex(count, count);
-    var edge = StreetModelForTest.escalatorEdge(from, to, 30, null);
+    var edge = StreetModelForTest.escalatorEdge(from, to, 30);
 
     currentState = requireSingleState(edge.traverse(currentState));
     return this;
@@ -233,6 +233,16 @@ public class TestStateBuilder {
       .withName(name)
       .buildAndConnect();
     currentState = edge.traverse(currentState)[0];
+    return this;
+  }
+
+  public TestStateBuilder escalatorEdgeAndStationEntrance() {
+    count++;
+    var from = (StreetVertex) currentState.vertex;
+    var to = new StationEntranceVertex(count, count, 12345, "B", Accessibility.POSSIBLE);
+    var edge = StreetModelForTest.escalatorEdge(from, to, 30);
+
+    currentState = requireSingleState(edge.traverse(currentState));
     return this;
   }
 

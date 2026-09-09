@@ -1,11 +1,9 @@
 package org.opentripplanner.street.model;
 
-import static org.opentripplanner.transit.model._data.TimetableRepositoryForTest.id;
+import static org.opentripplanner.core.model.id.FeedScopedIdForTestFactory.id;
 
-import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
-import javax.annotation.Nullable;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.LineString;
 import org.opentripplanner.core.model.accessibility.Accessibility;
@@ -25,6 +23,7 @@ import org.opentripplanner.street.model.edge.StreetEdgeBuilder;
 import org.opentripplanner.street.model.edge.TemporaryPartialStreetEdgeBuilder;
 import org.opentripplanner.street.model.vertex.IntersectionVertex;
 import org.opentripplanner.street.model.vertex.LabelledIntersectionVertex;
+import org.opentripplanner.street.model.vertex.OsmVertex;
 import org.opentripplanner.street.model.vertex.StreetVertex;
 import org.opentripplanner.street.model.vertex.TemporaryStreetLocation;
 import org.opentripplanner.street.model.vertex.TransitEntranceVertex;
@@ -108,12 +107,7 @@ public class StreetModelForTest {
     return streetEdgeBuilder(vA, vB, length, perm, false).buildAndConnect();
   }
 
-  public static EscalatorEdge escalatorEdge(
-    StreetVertex vA,
-    StreetVertex vB,
-    double length,
-    @Nullable Duration duration
-  ) {
+  public static EscalatorEdge escalatorEdge(StreetVertex vA, StreetVertex vB, double length) {
     return EscalatorEdge.createEscalatorEdge(vA, vB, length, null);
   }
 
@@ -128,7 +122,7 @@ public class StreetModelForTest {
     coords[1] = vB.getCoordinate();
     LineString geom = GeometryUtils.getGeometryFactory().createLineString(coords);
 
-    AreaGroup AREA = new AreaGroup(null);
+    AreaGroup area = AreaGroup.of(null).build();
 
     return new AreaEdgeBuilder()
       .withFromVertex(vA)
@@ -136,7 +130,7 @@ public class StreetModelForTest {
       .withGeometry(geom)
       .withPermission(perm)
       .withName(name)
-      .withArea(AREA)
+      .withArea(area)
       .buildAndConnect();
   }
 
@@ -148,8 +142,28 @@ public class StreetModelForTest {
     return streetEdge(from, to, 1, permissions);
   }
 
+  /**
+   * Connects two vertices with a pair of {@link StreetEdge}s, one in each direction, allowing
+   * {@link StreetTraversalPermission#PEDESTRIAN} traffic.
+   */
+  public static void bidirectional(StreetVertex a, StreetVertex b) {
+    bidirectional(a, b, StreetTraversalPermission.PEDESTRIAN);
+  }
+
+  /**
+   * Connects two vertices with a pair of {@link StreetEdge}s, one in each direction.
+   */
+  public static void bidirectional(StreetVertex a, StreetVertex b, StreetTraversalPermission perm) {
+    streetEdge(a, b, perm);
+    streetEdge(b, a, perm);
+  }
+
   public static VehicleParking.VehicleParkingBuilder vehicleParking() {
-    return VehicleParking.builder().id(id("vehicle-parking-1")).coordinate(WgsCoordinate.GREENWICH);
+    return VehicleParking.of().id(id("vehicle-parking-1")).coordinate(WgsCoordinate.GREENWICH);
+  }
+
+  public static OsmVertex osmVertex(Coordinate c, long nodeId) {
+    return new OsmVertex(c.x, c.y, nodeId);
   }
 
   static class GraphBuilder {
@@ -211,15 +225,10 @@ public class StreetModelForTest {
     TemporaryStreetLocation location = new TemporaryStreetLocation(nearestPoint, name);
 
     for (StreetEdge street : edges) {
-      Vertex fromv = street.getFromVertex();
       Vertex tov = street.getToVertex();
 
       /* forward edges and vertices */
-      if (SphericalDistanceLibrary.distance(nearestPoint, fromv.getCoordinate()) < 1) {
-        // no need to link to area edges caught on-end
-      } else if (SphericalDistanceLibrary.distance(nearestPoint, tov.getCoordinate()) < 1) {
-        // no need to link to area edges caught on-end
-      } else {
+      if (!(SphericalDistanceLibrary.distance(nearestPoint, tov.getCoordinate()) < 1)) {
         // creates links from street head -> location -> street tail.
         createHalfLocationForTest(location, name, nearestPoint, street, endVertex);
       }

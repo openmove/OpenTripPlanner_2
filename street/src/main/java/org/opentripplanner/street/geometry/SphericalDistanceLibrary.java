@@ -9,9 +9,11 @@ import static java.lang.Math.toDegrees;
 import static java.lang.Math.toRadians;
 
 import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.CoordinateSequence;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
+import org.locationtech.jts.geom.impl.PackedCoordinateSequence;
 
 public abstract class SphericalDistanceLibrary {
 
@@ -124,22 +126,6 @@ public abstract class SphericalDistanceLibrary {
   }
 
   /**
-   * Compute the length of a polyline
-   *
-   * @param lineString The polyline in (longitude, latitude degrees).
-   * @return The length, in meters, of the linestring.
-   */
-  public static double length(LineString lineString) {
-    double accumulatedMeters = 0;
-
-    for (int i = 1; i < lineString.getNumPoints(); i++) {
-      accumulatedMeters += distance(lineString.getCoordinateN(i - 1), lineString.getCoordinateN(i));
-    }
-
-    return accumulatedMeters;
-  }
-
-  /**
    * Compute the (approximated) length of a polyline
    *
    * @param lineString The polyline in (longitude, latitude degrees).
@@ -148,8 +134,8 @@ public abstract class SphericalDistanceLibrary {
   public static double fastLength(LineString lineString) {
     // Warn: do not use LineString.getCentroid() as it is broken
     // for degenerated geometry (same first/last point).
-    Coordinate[] coordinates = lineString.getCoordinates();
-    double middleY = (coordinates[0].y + coordinates[coordinates.length - 1].y) / 2.0;
+    CoordinateSequence seq = lineString.getCoordinateSequence();
+    double middleY = (seq.getY(0) + seq.getY(seq.size() - 1)) / 2.0;
     double cosLat = cos(toRadians(middleY));
     return equirectangularProject(lineString, cosLat).getLength() * RADIUS_OF_EARTH_IN_M;
   }
@@ -234,7 +220,7 @@ public abstract class SphericalDistanceLibrary {
    * converge toward the poles.
    */
   public static double degreesLatitudeToMeters(double degreesLatitude) {
-    return ((2 * Math.PI * RADIUS_OF_EARTH_IN_M) * degreesLatitude) / 360;
+    return (2 * Math.PI * RADIUS_OF_EARTH_IN_M * degreesLatitude) / 360;
   }
 
   /**
@@ -299,12 +285,15 @@ public abstract class SphericalDistanceLibrary {
    * @return The projected polyline. Coordinates in radians.
    */
   private static LineString equirectangularProject(LineString lineString, double cosLat) {
-    Coordinate[] coords = lineString.getCoordinates();
-    Coordinate[] coords2 = new Coordinate[coords.length];
-    for (int i = 0; i < coords.length; i++) {
-      coords2[i] = new Coordinate(toRadians(coords[i].x) * cosLat, toRadians(coords[i].y));
+    CoordinateSequence seq = lineString.getCoordinateSequence();
+    int n = seq.size();
+    double[] projected = new double[n * 2];
+    for (int i = 0; i < n; i++) {
+      projected[i * 2] = toRadians(seq.getX(i)) * cosLat;
+      projected[i * 2 + 1] = toRadians(seq.getY(i));
     }
-    return GeometryUtils.getGeometryFactory().createLineString(coords2);
+    CoordinateSequence projSeq = new PackedCoordinateSequence.Double(projected, 2, 0);
+    return GeometryUtils.getGeometryFactory().createLineString(projSeq);
   }
 
   private static double p2(double a) {

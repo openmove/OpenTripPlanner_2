@@ -6,11 +6,11 @@ import org.locationtech.jts.geom.Coordinate;
 import org.opentripplanner.core.model.i18n.I18NString;
 import org.opentripplanner.core.model.i18n.LocalizedString;
 import org.opentripplanner.core.model.i18n.NonLocalizedString;
-import org.opentripplanner.routing.linking.TemporaryVerticesContainer;
-import org.opentripplanner.routing.linking.VertexLinker;
+import org.opentripplanner.street.linking.LinkingDirection;
+import org.opentripplanner.street.linking.TemporaryVerticesContainer;
+import org.opentripplanner.street.linking.VertexLinker;
 import org.opentripplanner.street.model.StreetMode;
 import org.opentripplanner.street.model.edge.Edge;
-import org.opentripplanner.street.model.edge.LinkingDirection;
 import org.opentripplanner.street.model.edge.TemporaryFreeEdge;
 import org.opentripplanner.street.model.vertex.StreetVertex;
 import org.opentripplanner.street.model.vertex.TemporaryStreetLocation;
@@ -53,9 +53,10 @@ public class VertexCreationService {
   ) {
     LOG.debug("Creating {} vertex for {}", type.description(), coordinate);
 
-    I18NString name = label == null || label.isEmpty()
-      ? new LocalizedString(type.translationKey())
-      : new NonLocalizedString(label);
+    I18NString name =
+      label == null || label.isEmpty()
+        ? new LocalizedString(type.translationKey())
+        : new NonLocalizedString(label);
 
     var temporaryStreetLocation = new TemporaryStreetLocation(coordinate, name);
 

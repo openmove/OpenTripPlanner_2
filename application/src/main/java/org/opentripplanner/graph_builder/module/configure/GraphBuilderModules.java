@@ -1,15 +1,13 @@
 package org.opentripplanner.graph_builder.module.configure;
 
-import static org.opentripplanner.datastore.api.FileType.DEM;
-
 import dagger.Module;
 import dagger.Provides;
 import jakarta.inject.Singleton;
-import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import javax.annotation.Nullable;
 import org.opentripplanner.core.framework.deduplicator.DeduplicatorService;
+import org.opentripplanner.datastore.api.CompositeDataSource;
 import org.opentripplanner.datastore.api.DataSource;
 import org.opentripplanner.ext.dataoverlay.EdgeUpdaterModule;
 import org.opentripplanner.ext.dataoverlay.configure.DataOverlayFactory;
@@ -25,17 +23,20 @@ import org.opentripplanner.graph_builder.model.ConfiguredDataSource;
 import org.opentripplanner.graph_builder.module.RouteToCentroidStationIdsValidator;
 import org.opentripplanner.graph_builder.module.StreetLinkerModule;
 import org.opentripplanner.graph_builder.module.TurnRestrictionModule;
-import org.opentripplanner.graph_builder.module.islandpruning.PruneIslands;
+import org.opentripplanner.graph_builder.module.cache.GraphBuildCacheManager;
+import org.opentripplanner.graph_builder.module.islandpruning.IslandPruningModule;
+import org.opentripplanner.graph_builder.module.islandpruning.IslandPruningParameters;
 import org.opentripplanner.graph_builder.module.ned.DegreeGridNEDTileSource;
 import org.opentripplanner.graph_builder.module.ned.ElevationModule;
 import org.opentripplanner.graph_builder.module.ned.GeotiffGridCoverageFactoryImpl;
 import org.opentripplanner.graph_builder.module.ned.NEDGridCoverageFactoryImpl;
 import org.opentripplanner.graph_builder.module.ned.parameter.DemExtractParameters;
+import org.opentripplanner.graph_builder.module.osm.EdgeNamer;
 import org.opentripplanner.graph_builder.module.osm.OsmModule;
 import org.opentripplanner.graph_builder.module.osm.parameters.OsmExtractParameters;
+import org.opentripplanner.graph_builder.module.stopconnectivity.StopConnectivityModule;
 import org.opentripplanner.graph_builder.module.transfer.DirectTransferGenerator;
 import org.opentripplanner.graph_builder.services.ned.ElevationGridCoverageFactory;
-import org.opentripplanner.graph_builder.services.osm.EdgeNamer;
 import org.opentripplanner.gtfs.graphbuilder.GtfsBundle;
 import org.opentripplanner.gtfs.graphbuilder.GtfsModule;
 import org.opentripplanner.netex.NetexModule;
@@ -44,22 +45,31 @@ import org.opentripplanner.osm.DefaultOsmProvider;
 import org.opentripplanner.osm.OsmProvider;
 import org.opentripplanner.routing.api.request.preference.WalkPreferences;
 import org.opentripplanner.routing.fares.FareServiceFactory;
-import org.opentripplanner.routing.linking.VertexLinker;
 import org.opentripplanner.service.osminfo.OsmInfoGraphBuildRepository;
 import org.opentripplanner.service.streetdetails.StreetDetailsRepository;
 import org.opentripplanner.service.vehicleparking.VehicleParkingRepository;
 import org.opentripplanner.standalone.config.BuildConfig;
 import org.opentripplanner.street.StreetRepository;
 import org.opentripplanner.street.graph.Graph;
+import org.opentripplanner.street.linking.VertexLinker;
 import org.opentripplanner.transfer.regular.TransferRepository;
 import org.opentripplanner.transit.model.framework.Deduplicator;
-import org.opentripplanner.transit.service.TimetableRepository;
+import org.opentripplanner.transit.service.TransitRepository;
 
 /**
  * Configure all modules that are not simple enough to be injected.
  */
 @Module
 public class GraphBuilderModules {
+
+  @Provides
+  @Singleton
+  static GraphBuildCacheManager provideGraphBuildCacheManager(
+    BuildConfig config,
+    GraphBuilderDataSources dataSources
+  ) {
+    return new GraphBuildCacheManager(config.cache(), dataSources.listCachedDataSources());
+  }
 
   @Provides
   @Singleton
@@ -72,19 +82,17 @@ public class GraphBuilderModules {
     StreetRepository streetRepository,
     VehicleParkingRepository vehicleParkingRepository,
     EdgeNamer edgeNamer,
-    DataImportIssueStore issueStore
+    DataImportIssueStore issueStore,
+    GraphBuildCacheManager cacheManager
   ) {
     List<OsmProvider> providers = new ArrayList<>();
-    for (ConfiguredDataSource<
-      OsmExtractParameters
-    > osmConfiguredDataSource : dataSources.getOsmConfiguredDataSource()) {
+    for (ConfiguredDataSource<OsmExtractParameters> osmConfiguredDataSource : dataSources.getOsmConfiguredDataSource()) {
       providers.add(
         new DefaultOsmProvider(
           osmConfiguredDataSource.dataSource(),
           osmConfiguredDataSource.config().osmTagMapper(),
           osmConfiguredDataSource.config().timeZone(),
-          config.osmCacheDataInMem,
-          issueStore
+          config.osmCacheDataInMem
         )
       );
     }
@@ -105,7 +113,9 @@ public class GraphBuilderModules {
       .withIncludeInclinedEdgeLevelInfo(config.includeInclinedEdgeLevelInfo)
       .withMaxAreaNodes(config.maxAreaNodes)
       .withBoardingAreaRefTags(config.boardingLocationTags)
-      .withIncludeOsmSubwayEntrances(config.osmDefaults.includeOsmSubwayEntrances())
+      .withElevatorRefTags(config.elevatorRefTags)
+      .withIncludeOsmStationEntrances(config.osmDefaults.includeOsmStationEntrances())
+      .withCacheManager(cacheManager)
       .withIssueStore(issueStore)
       .build();
   }
@@ -117,7 +127,7 @@ public class GraphBuilderModules {
     BuildConfig config,
     Graph graph,
     DeduplicatorService deduplicator,
-    TimetableRepository timetableRepository,
+    TransitRepository transitRepository,
     StreetDetailsRepository streetDetailsRepository,
     DataImportIssueStore issueStore,
     FareServiceFactory fareServiceFactory
@@ -128,7 +138,7 @@ public class GraphBuilderModules {
     }
     return new GtfsModule(
       gtfsBundles,
-      timetableRepository,
+      transitRepository,
       streetDetailsRepository,
       graph,
       deduplicator,
@@ -147,14 +157,14 @@ public class GraphBuilderModules {
     BuildConfig config,
     Graph graph,
     DeduplicatorService deduplicator,
-    TimetableRepository timetableRepository,
+    TransitRepository transitRepository,
     StreetDetailsRepository streetDetailsRepository,
     VehicleParkingRepository parkingRepository,
     DataImportIssueStore issueStore
   ) {
     return new NetexConfigure(config).createNetexModule(
       dataSources.getNetexConfiguredDataSource(),
-      timetableRepository,
+      transitRepository,
       parkingRepository,
       streetDetailsRepository,
       graph,
@@ -168,44 +178,47 @@ public class GraphBuilderModules {
   static StreetLinkerModule provideStreetLinkerModule(
     Graph graph,
     VehicleParkingRepository parkingRepository,
-    TimetableRepository timetableRepository,
+    TransitRepository transitRepository,
     DataImportIssueStore issueStore,
     VertexLinker linker
   ) {
-    return new StreetLinkerModule(
-      graph,
-      linker,
-      parkingRepository,
-      timetableRepository,
-      issueStore
-    );
+    return new StreetLinkerModule(graph, linker, parkingRepository, transitRepository, issueStore);
   }
 
   @Provides
   @Singleton
-  static PruneIslands providePruneIslands(
+  static StopConnectivityModule provideStopConnectivityModule(
+    Graph graph,
+    DataImportIssueStore issueStore
+  ) {
+    return new StopConnectivityModule(graph, issueStore);
+  }
+
+  @Provides
+  @Singleton
+  static IslandPruningModule provideIslandPruningModule(
     BuildConfig config,
     Graph graph,
     VehicleParkingRepository parkingRepository,
-    TimetableRepository timetableRepository,
+    TransitRepository transitRepository,
     DataImportIssueStore issueStore,
     VertexLinker linker
   ) {
-    PruneIslands pruneIslands = new PruneIslands(
+    var parameters = IslandPruningParameters.of()
+      .withPruningThresholdIslandWithoutStops(
+        config.islandPruning.pruningThresholdIslandWithoutStops
+      )
+      .withPruningThresholdIslandWithStops(config.islandPruning.pruningThresholdIslandWithStops)
+      .withAdaptivePruningFactor(config.islandPruning.adaptivePruningFactor)
+      .withAdaptivePruningDistance(config.islandPruning.adaptivePruningDistance)
+      .build();
+    return new IslandPruningModule(
       graph,
-      timetableRepository,
+      transitRepository,
       issueStore,
-      new StreetLinkerModule(graph, linker, parkingRepository, timetableRepository, issueStore)
+      new StreetLinkerModule(graph, linker, parkingRepository, transitRepository, issueStore),
+      parameters
     );
-    pruneIslands.setPruningThresholdIslandWithoutStops(
-      config.islandPruning.pruningThresholdIslandWithoutStops
-    );
-    pruneIslands.setPruningThresholdIslandWithStops(
-      config.islandPruning.pruningThresholdIslandWithStops
-    );
-    pruneIslands.setAdaptivePruningFactor(config.islandPruning.adaptivePruningFactor);
-    pruneIslands.setAdaptivePruningDistance(config.islandPruning.adaptivePruningDistance);
-    return pruneIslands;
   }
 
   @Provides
@@ -215,15 +228,16 @@ public class GraphBuilderModules {
     GraphBuilderDataSources dataSources,
     Graph graph,
     OsmModule osmModule,
-    DataImportIssueStore issueStore
+    DataImportIssueStore issueStore,
+    GraphBuildCacheManager cacheManager
   ) {
     List<ElevationModule> result = new ArrayList<>();
     List<ElevationGridCoverageFactory> gridCoverageFactories = new ArrayList<>();
     if (config.elevationBucket != null) {
       gridCoverageFactories.add(
-        createNedElevationFactory(new File(dataSources.getCacheDirectory(), "ned"), config)
+        createNedElevationFactory(dataSources.getNedCacheDirectory(), config)
       );
-    } else if (dataSources.has(DEM)) {
+    } else if (dataSources.hasDem()) {
       gridCoverageFactories.addAll(
         createDemGeotiffGridCoverageFactories(dataSources.getDemConfiguredDataSource())
       );
@@ -232,16 +246,7 @@ public class GraphBuilderModules {
     // modules to the same graph builder. We do not actually know if this is supported by the
     // ElevationModule class.
     for (ElevationGridCoverageFactory it : gridCoverageFactories) {
-      result.add(
-        createElevationModule(
-          config,
-          graph,
-          issueStore,
-          it,
-          osmModule,
-          dataSources.getCacheDirectory()
-        )
-      );
+      result.add(createElevationModule(config, graph, issueStore, it, osmModule, cacheManager));
     }
     return result;
   }
@@ -251,18 +256,16 @@ public class GraphBuilderModules {
   static DirectTransferGenerator provideDirectTransferGenerator(
     BuildConfig config,
     Graph graph,
-    TimetableRepository timetableRepository,
+    TransitRepository transitRepository,
     TransferRepository transferRepository,
     DataImportIssueStore issueStore
   ) {
     return new DirectTransferGenerator(
       graph,
-      timetableRepository,
+      transitRepository,
       transferRepository,
       issueStore,
-      config.maxTransferDuration,
-      config.transferRequests,
-      config.transferParametersForMode
+      config.regularTransferParameters()
     );
   }
 
@@ -272,15 +275,15 @@ public class GraphBuilderModules {
     BuildConfig config,
     Graph graph,
     VertexLinker linker,
-    TimetableRepository timetableRepository,
+    TransitRepository transitRepository,
     DataImportIssueStore issueStore
   ) {
     return new DirectTransferAnalyzer(
       graph,
       linker,
-      timetableRepository,
+      transitRepository,
       issueStore,
-      config.maxTransferDuration.toSeconds() * WalkPreferences.DEFAULT.speed()
+      config.regularTransferParameters().maxDuration().toSeconds() * WalkPreferences.DEFAULT.speed()
     );
   }
 
@@ -330,13 +333,13 @@ public class GraphBuilderModules {
   @Singleton
   @Nullable
   static StopConsolidationModule providesStopConsolidationModule(
-    TimetableRepository timetableRepository,
+    TransitRepository transitRepository,
     @Nullable StopConsolidationRepository repo,
     GraphBuilderDataSources dataSources
   ) {
     return dataSources
       .stopConsolidation()
-      .map(ds -> StopConsolidationModule.of(timetableRepository, repo, ds))
+      .map(ds -> StopConsolidationModule.of(transitRepository, repo, ds))
       .orElse(null);
   }
 
@@ -346,12 +349,12 @@ public class GraphBuilderModules {
   static RouteToCentroidStationIdsValidator routeToCentroidStationIdValidator(
     DataImportIssueStore issueStore,
     BuildConfig config,
-    TimetableRepository timetableRepository
+    TransitRepository transitRepository
   ) {
     var ids = config.transitRouteToStationCentroid();
     return ids.isEmpty()
       ? null
-      : new RouteToCentroidStationIdsValidator(issueStore, ids, timetableRepository);
+      : new RouteToCentroidStationIdsValidator(issueStore, ids, transitRepository);
   }
 
   @Provides
@@ -363,7 +366,7 @@ public class GraphBuilderModules {
   /* private methods */
 
   private static ElevationGridCoverageFactory createNedElevationFactory(
-    File nedCacheDirectory,
+    CompositeDataSource nedCacheDir,
     BuildConfig config
   ) {
     // Download the elevation tiles from an Amazon S3 bucket
@@ -372,7 +375,11 @@ public class GraphBuilderModules {
     awsTileSource.awsSecretKey = config.elevationBucket.secretKey;
     awsTileSource.awsBucketName = config.elevationBucket.bucketName;
 
-    return new NEDGridCoverageFactoryImpl(nedCacheDirectory, awsTileSource);
+    return new NEDGridCoverageFactoryImpl(
+      nedCacheDir,
+      config.elevationBucket.datumUrl,
+      awsTileSource
+    );
   }
 
   private static List<ElevationGridCoverageFactory> createDemGeotiffGridCoverageFactories(
@@ -394,22 +401,19 @@ public class GraphBuilderModules {
     DataImportIssueStore issueStore,
     ElevationGridCoverageFactory it,
     OsmModule osmModule,
-    File cacheDirectory
+    GraphBuildCacheManager cacheManager
   ) {
-    var cachedElevationsFile = new File(cacheDirectory, "cached_elevations.obj");
-
     return new ElevationModule(
       it,
       graph,
       issueStore,
-      cachedElevationsFile,
+      cacheManager,
       osmModule.elevationDataOutput(),
-      config.readCachedElevations,
-      config.writeCachedElevations,
       config.distanceBetweenElevationSamples,
       config.maxElevationPropagationMeters,
       config.includeEllipsoidToGeoidDifference,
-      config.multiThreadElevationCalculations
+      config.multiThreadElevationCalculations,
+      config.elevationTileCacheSizeMB
     );
   }
 

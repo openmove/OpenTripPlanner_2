@@ -9,6 +9,7 @@ import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.opentripplanner.core.model.id.FeedScopedId;
@@ -18,29 +19,38 @@ import org.opentripplanner.model.fare.FareOffer;
 import org.opentripplanner.model.fare.FareProduct;
 import org.opentripplanner.model.plan.TransitLeg;
 import org.opentripplanner.utils.collection.SetUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * The main part of the fare engine: it applies the leg and transfer rules to the transit legs.
  */
 class FareLookupService implements Serializable {
 
-  private static final Logger LOG = LoggerFactory.getLogger(FareLookupService.class);
+  /// The GTFS spec is underspecified about which fare products free transfers should apply to.
+  /// The interpretation of this implementation is that transfers apply to only those fare
+  /// products that share the same category and fare medium.
+  /// - [Github issue](https://github.com/google/transit/pull/423)
+  static final FreeTransferEligibility DEFAULT_FREE_TRANSFER_MATCH_PREDICATE =
+    TransferMatch::matchesEligibility;
   private final List<FareLegRule> legRules;
   private final List<FareTransferRule> transferRules;
   private final AreaMatcher areaMatcher;
   private final NetworkMatcher networkMatcher;
   private final TimeframeMatcher timeframeMatcher;
+  private final FreeTransferEligibility freeTransferEligibility;
 
+  /// @param freeTransferEligibility A bi-predicate that determines if a free transfer applies
+  /// to a given transfer match and fare product. This needs to be configurable because of custom
+  /// fare services.
   FareLookupService(
     List<FareLegRule> legRules,
     List<FareTransferRule> fareTransferRules,
     Multimap<FeedScopedId, FeedScopedId> stopAreas,
-    Multimap<FeedScopedId, LocalDate> serviceDates
+    Multimap<FeedScopedId, LocalDate> serviceDates,
+    FreeTransferEligibility freeTransferEligibility
   ) {
     this.legRules = List.copyOf(legRules);
-    this.transferRules = stripWildcards(fareTransferRules);
+    this.transferRules = List.copyOf(fareTransferRules);
+    this.freeTransferEligibility = freeTransferEligibility;
 
     var rulePriorityMatcher = new RulePriorityMatcher(legRules);
     this.areaMatcher = new AreaMatcher(rulePriorityMatcher, legRules, stopAreas);
@@ -52,7 +62,7 @@ class FareLookupService implements Serializable {
    * Are there free transfers between the legs?
    */
   boolean hasFreeTransfers(List<TransitLeg> legs) {
-    return !findTransfersMatchingAllLegs(legs).isEmpty();
+    return !findTransfersMatchingAllLegs(legs, FareTransferRule::unlimitedTransfers).isEmpty();
   }
 
   /**
@@ -67,7 +77,8 @@ class FareLookupService implements Serializable {
    * exist.
    */
   Set<FareLegRule> legRules(TransitLeg leg) {
-    var rules = this.legRules.stream()
+    var rules = this.legRules
+      .stream()
       .filter(r -> legMatchesRule(leg, r))
       .collect(Collectors.toUnmodifiableSet());
     var containsPriorities = rules.stream().anyMatch(r -> r.priority().isPresent());
@@ -81,12 +92,16 @@ class FareLookupService implements Serializable {
   /**
    * Find those fare products that match all legs through an unlimited transfer.
    */
-  Set<FareProduct> findTransfersMatchingAllLegs(List<TransitLeg> legs) {
+  Set<FareProduct> findTransfersMatchingAllLegs(
+    List<TransitLeg> legs,
+    Predicate<FareTransferRule> transferPredicate
+  ) {
     if (legs.size() < 2) {
       return Set.of();
     }
-    return this.transferRules.stream()
-      .filter(FareTransferRule::unlimitedTransfers)
+    return this.transferRules
+      .stream()
+      .filter(transferPredicate)
       .filter(FareTransferRule::isFree)
       .filter(r -> TimeLimitEvaluator.withinTimeLimit(r, legs.getFirst(), legs.getLast()))
       .flatMap(r -> findTransferMatches(r, legs).stream())
@@ -106,10 +121,16 @@ class FareLookupService implements Serializable {
   }
 
   /**
-   * Find fare offers for a specific pair of legs.
+   * Find fare offers for a specific head and a tail of legs.
    */
-  Set<LegOffer> findTransferOffersForSubLegs(TransitLeg head, List<TransitLeg> tail) {
-    Set<TransferMatch> transfers = this.transferRules.stream()
+  Set<LegOffer> findTransferOffersForSubLegs(
+    TransitLeg head,
+    List<TransitLeg> tail,
+    Predicate<FareTransferRule> transferPredicate
+  ) {
+    Set<TransferMatch> transfers = this.transferRules
+      .stream()
+      .filter(transferPredicate)
       .flatMap(r -> {
         var fromRules = findFareLegRule(r.fromLegGroup());
         var toRules = findFareLegRule(r.toLegGroup());
@@ -147,11 +168,14 @@ class FareLookupService implements Serializable {
           .fromLegRule()
           .fareProducts()
           .stream()
+          // the GTFS spec is underspecified about whether transfers apply only to specific
+          // fare products or all of them: https://github.com/google/transit/pull/423
+          .filter(p -> freeTransferEligibility.test(t, p))
           .map(product ->
             LegOffer.of(
               FareOffer.of(head.startTime(), product, dependencies.get(product)),
               head,
-              t.transferRule().timeLimit().orElse(null)
+              t.transferRule()
             )
           )
       )
@@ -182,9 +206,10 @@ class FareLookupService implements Serializable {
     List<FareLegRule> fromRules,
     List<FareLegRule> toRules
   ) {
+    Predicate<FareLegRule> predicate = _ -> TimeLimitEvaluator.withinTimeLimit(r, from, to);
     return fromRules
       .stream()
-      .filter(match -> TimeLimitEvaluator.withinTimeLimit(r, from, to))
+      .filter(predicate)
       .flatMap(fromRule -> toRules.stream().map(toRule -> new TransferMatch(r, fromRule, toRule)))
       .filter(
         match -> legMatchesRule(from, match.fromLegRule()) && legMatchesRule(to, match.toLegRule())
@@ -247,22 +272,6 @@ class FareLookupService implements Serializable {
       .stream()
       .filter(r -> r.legGroupId().equals(id))
       .toList();
-  }
-
-  private static List<FareTransferRule> stripWildcards(Collection<FareTransferRule> rules) {
-    return rules.stream().filter(FareLookupService::checkForWildcards).toList();
-  }
-
-  private static boolean checkForWildcards(FareTransferRule t) {
-    if (t.containsWildCard()) {
-      LOG.warn(
-        "Transfer rule {} contains a wildcard leg group reference. These are not supported yet.",
-        t
-      );
-      return false;
-    } else {
-      return true;
-    }
   }
 
   /**

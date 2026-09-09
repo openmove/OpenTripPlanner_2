@@ -25,7 +25,6 @@ import org.opentripplanner.model.plan.walkstep.verticaltransportation.StairsUse;
 import org.opentripplanner.service.streetdetails.internal.DefaultStreetDetailsRepository;
 import org.opentripplanner.service.streetdetails.internal.DefaultStreetDetailsService;
 import org.opentripplanner.street.geometry.WgsCoordinate;
-import org.opentripplanner.street.internal.notes.StreetNotesService;
 import org.opentripplanner.street.search.state.TestStateBuilder;
 import org.opentripplanner.transit.model.site.Entrance;
 
@@ -89,10 +88,11 @@ class StatesToWalkStepsMapperTest {
         .streetEdge()
         .areaEdge("name", 10)
     );
-    assertEquals(3, walkSteps.size());
+    assertEquals(4, walkSteps.size());
     assertEquals(RelativeDirection.DEPART, walkSteps.get(0).getRelativeDirection());
     assertEquals(RelativeDirection.ENTER_OR_EXIT_STATION, walkSteps.get(1).getRelativeDirection());
     assertEquals(RelativeDirection.CONTINUE, walkSteps.get(2).getRelativeDirection());
+    assertEquals(RelativeDirection.CONTINUE, walkSteps.get(3).getRelativeDirection());
   }
 
   @Test
@@ -120,6 +120,30 @@ class StatesToWalkStepsMapperTest {
   }
 
   @Test
+  void exitStationWithEntranceAsLastStep() {
+    var walkSteps = buildWalkSteps(
+      TestStateBuilder.ofWalking().streetEdge("name", 1).entrance("name")
+    );
+    assertEquals(2, walkSteps.size());
+    assertEquals(RelativeDirection.DEPART, walkSteps.get(0).getRelativeDirection());
+    assertEquals(RelativeDirection.ENTER_OR_EXIT_STATION, walkSteps.get(1).getRelativeDirection());
+  }
+
+  @Test
+  void escalatorAndEntrance() {
+    var walkSteps = buildWalkSteps(
+      TestStateBuilder.ofWalking().streetEdge("name", 1).escalatorEdgeAndStationEntrance()
+    );
+    assertEquals(3, walkSteps.size());
+    assertEquals(RelativeDirection.DEPART, walkSteps.get(0).getRelativeDirection());
+    assertEquals(
+      EscalatorUse.class.getSimpleName(),
+      walkSteps.get(1).verticalTransportationUse().get().getClass().getSimpleName()
+    );
+    assertEquals(RelativeDirection.ENTER_OR_EXIT_STATION, walkSteps.get(2).getRelativeDirection());
+  }
+
+  @Test
   void signpostedPathway() {
     final String sign = "follow signs to platform 1";
     final TestStateBuilder builder = TestStateBuilder.ofWalking().streetEdge().pathway(sign);
@@ -136,7 +160,6 @@ class StatesToWalkStepsMapperTest {
     var mapper = new StatesToWalkStepsMapper(
       path.states,
       null,
-      new StreetNotesService(),
       new DefaultStreetDetailsService(new DefaultStreetDetailsRepository()),
       id -> Entrance.of(id).withCoordinate(WgsCoordinate.GREENWICH).build(),
       0

@@ -1,13 +1,13 @@
 package org.opentripplanner.updater.trip.gtfs.model;
 
-import static org.opentripplanner.updater.spi.UpdateError.UpdateErrorType.INVALID_INPUT_STRUCTURE;
-import static org.opentripplanner.updater.spi.UpdateError.UpdateErrorType.INVALID_STOP_SEQUENCE;
+import static org.opentripplanner.updater.spi.UpdateErrorType.INVALID_INPUT_STRUCTURE;
+import static org.opentripplanner.updater.spi.UpdateErrorType.INVALID_STOP_SEQUENCE;
 import static org.opentripplanner.updater.trip.gtfs.model.GtfsRealtimeMapper.mapWheelchairAccessible;
 
 import com.google.transit.realtime.GtfsRealtime;
 import com.google.transit.realtime.GtfsRealtime.TripDescriptor.ScheduleRelationship;
-import java.text.ParseException;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -17,9 +17,8 @@ import org.opentripplanner.core.model.accessibility.Accessibility;
 import org.opentripplanner.core.model.i18n.I18NString;
 import org.opentripplanner.core.model.id.FeedScopedId;
 import org.opentripplanner.transit.model.framework.DataValidationException;
-import org.opentripplanner.transit.model.framework.Result;
-import org.opentripplanner.updater.spi.UpdateError;
-import org.opentripplanner.updater.spi.UpdateSuccess;
+import org.opentripplanner.updater.spi.UpdateException;
+import org.opentripplanner.utils.lang.StringUtils;
 
 /**
  * A real-time update for trip, which may contain updated stop times and trip properties.
@@ -31,7 +30,7 @@ public final class TripUpdate {
   private final com.google.transit.realtime.GtfsRealtime.TripUpdate tripUpdate;
   private final TripDescriptor tripDescriptor;
   private final Supplier<LocalDate> localDateNow;
-  private LocalDate serviceDate;
+  private LocalDate startDate;
 
   public TripUpdate(
     String feedId,
@@ -76,20 +75,14 @@ public final class TripUpdate {
       );
   }
 
-  public LocalDate serviceDate() {
-    if (serviceDate != null) {
-      return serviceDate;
+  public LocalDate startDate() {
+    if (startDate != null) {
+      return startDate;
     }
-    try {
-      // TODO: figure out the correct service date. For the special case that a trip
-      // starts for example at 40:00, yesterday would probably be a better guess.
-      serviceDate = tripDescriptor.startDate().orElse(localDateNow.get());
-      return serviceDate;
-    } catch (ParseException e) {
-      throw new RuntimeException(
-        "TripDescription does not have a valid startDate: call validate() first."
-      );
-    }
+    // TODO: figure out the correct service date. For the special case that a trip
+    // starts for example at 40:00, yesterday would probably be a better guess.
+    startDate = tripDescriptor.startDate().orElse(localDateNow.get());
+    return startDate;
   }
 
   public ScheduleRelationship scheduleRelationship() {
@@ -97,28 +90,27 @@ public final class TripUpdate {
   }
 
   public FeedScopedId tripId() {
-    return tripDescriptor
-      .tripId()
-      .map(id -> new FeedScopedId(feedId, id))
-      // this should never happen because an empty trip id will lead to an exception in the
-      // constructor.
-      .orElseThrow(() ->
-        new IllegalStateException(
-          "Trip ID is missing from trip update. This indicates a programming error."
+    return (
+      tripDescriptor
+        .tripId()
+        .map(id -> new FeedScopedId(feedId, id))
+        // this should never happen because an empty trip id will lead to an exception in the
+        // constructor.
+        .orElseThrow(() ->
+          new IllegalStateException(
+            "Trip ID is missing from trip update. This indicates a programming error."
+          )
         )
-      );
+    );
   }
 
-  public Result<UpdateSuccess, UpdateError> validate() throws DataValidationException {
+  public void validate() throws DataValidationException, UpdateException {
     if (tripDescriptor.tripId().isEmpty()) {
-      return Result.failure(UpdateError.noTripId(INVALID_INPUT_STRUCTURE));
+      throw UpdateException.noTripId(INVALID_INPUT_STRUCTURE);
     }
 
-    try {
-      tripDescriptor.startDate();
-    } catch (ParseException e) {
-      return Result.failure(new UpdateError(tripId(), INVALID_INPUT_STRUCTURE));
-    }
+    // exercise the getter, would throw an UpdateException if start date is malformed
+    tripDescriptor.startDate();
 
     var lastStopSequence = -1;
     for (StopTimeUpdate update : stopTimeUpdates()) {
@@ -127,15 +119,25 @@ public final class TripUpdate {
       if (stopSequence.isPresent()) {
         var seq = stopSequence.getAsInt();
         if (seq < 0) {
-          return UpdateError.result(tripId(), INVALID_STOP_SEQUENCE);
+          throw UpdateException.of(tripId(), INVALID_STOP_SEQUENCE);
         }
         if (seq <= lastStopSequence) {
-          return UpdateError.result(tripId(), INVALID_STOP_SEQUENCE);
+          throw UpdateException.of(tripId(), INVALID_STOP_SEQUENCE);
         }
         lastStopSequence = seq;
       }
     }
-    return Result.success(UpdateSuccess.noWarnings());
+  }
+
+  /// Validates the requirement for the schedule relationship DUPLICATED.
+  public void validateDuplicated() throws DataValidationException {
+    if (tripDescriptor.startDate().isEmpty() || tripDescriptor.startTime().isEmpty()) {
+      throw UpdateException.of(tripId(), INVALID_INPUT_STRUCTURE);
+    }
+  }
+
+  public Optional<LocalTime> startTime() {
+    return tripDescriptor.startTime();
   }
 
   public Optional<FeedScopedId> routeId() {
@@ -150,5 +152,11 @@ public final class TripUpdate {
 
   public Optional<GtfsRealtime.VehicleDescriptor> vehicle() {
     return tripUpdate.hasVehicle() ? Optional.of(tripUpdate.getVehicle()) : Optional.empty();
+  }
+
+  public Optional<String> vehicleId() {
+    return vehicle()
+      .filter(v -> StringUtils.hasValue(v.getId()))
+      .map(GtfsRealtime.VehicleDescriptor::getId);
   }
 }

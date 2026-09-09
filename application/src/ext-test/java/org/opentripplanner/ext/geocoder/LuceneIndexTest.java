@@ -1,7 +1,8 @@
 package org.opentripplanner.ext.geocoder;
 
+import static com.google.common.truth.Truth.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.opentripplanner.transit.model._data.TimetableRepositoryForTest.id;
+import static org.opentripplanner.core.model.id.FeedScopedIdForTestFactory.id;
 import static org.opentripplanner.transit.model.basic.TransitMode.BUS;
 import static org.opentripplanner.transit.model.basic.TransitMode.FERRY;
 
@@ -17,81 +18,90 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.opentripplanner._support.geometry.Polygons;
 import org.opentripplanner.core.model.id.FeedScopedId;
 import org.opentripplanner.ext.stopconsolidation.internal.DefaultStopConsolidationRepository;
 import org.opentripplanner.ext.stopconsolidation.internal.DefaultStopConsolidationService;
 import org.opentripplanner.model.FeedInfo;
-import org.opentripplanner.transit.model._data.TimetableRepositoryForTest;
+import org.opentripplanner.transit.model._data.TransitRepositoryForTest;
 import org.opentripplanner.transit.model.basic.TransitMode;
 import org.opentripplanner.transit.model.network.Route;
 import org.opentripplanner.transit.model.organization.Agency;
+import org.opentripplanner.transit.model.site.AreaStop;
 import org.opentripplanner.transit.model.site.RegularStop;
 import org.opentripplanner.transit.model.site.Station;
 import org.opentripplanner.transit.model.site.StopLocation;
 import org.opentripplanner.transit.service.DefaultTransitService;
-import org.opentripplanner.transit.service.TimetableRepository;
+import org.opentripplanner.transit.service.TransitRepository;
 
 class LuceneIndexTest {
 
-  private static final TimetableRepositoryForTest TEST_MODEL = TimetableRepositoryForTest.of();
+  private static final TransitRepositoryForTest TEST_MODEL = TransitRepositoryForTest.of();
 
-  static final Agency BVG = Agency.of(id("bvg"))
+  private static final Agency BVG = Agency.of(id("bvg"))
     .withName("BVG")
     .withTimezone("Europe/Berlin")
     .build();
 
   // Berlin
-  static final Station BERLIN_HAUPTBAHNHOF_STATION = TEST_MODEL.station("Hauptbahnhof")
+  private static final Station BERLIN_HAUPTBAHNHOF_STATION = TEST_MODEL.station("Hauptbahnhof")
     .withCoordinate(52.52495, 13.36952)
     .build();
-  static final Station ALEXANDERPLATZ_STATION = TEST_MODEL.station("Alexanderplatz")
+  private static final Station ALEXANDERPLATZ_STATION = TEST_MODEL.station("Alexanderplatz")
     .withCoordinate(52.52277, 13.41046)
     .build();
 
-  static final RegularStop ALEXANDERPLATZ_BUS = TEST_MODEL.stop("Alexanderplatz Bus")
+  private static final RegularStop ALEXANDERPLATZ_BUS = TEST_MODEL.stop("Alexanderplatz Bus")
     .withCoordinate(52.52277, 13.41046)
     .withVehicleType(BUS)
     .withParentStation(ALEXANDERPLATZ_STATION)
     .build();
 
-  static final RegularStop ALEXANDERPLATZ_RAIL = TEST_MODEL.stop("Alexanderplatz S-Bahn")
+  private static final RegularStop ALEXANDERPLATZ_RAIL = TEST_MODEL.stop("Alexanderplatz S-Bahn")
     .withCoordinate(52.52157, 13.41123)
     .withVehicleType(TransitMode.RAIL)
     .withParentStation(ALEXANDERPLATZ_STATION)
     .build();
-  static final RegularStop LICHTERFELDE_OST_1 = TEST_MODEL.stop("Lichterfelde Ost")
+  private static final RegularStop LICHTERFELDE_OST_1 = TEST_MODEL.stop("Lichterfelde Ost")
     .withId(id("lichterfelde-gleis-1"))
     .withCoordinate(52.42986, 13.32808)
     .build();
-  static final RegularStop LICHTERFELDE_OST_2 = TEST_MODEL.stop("Lichterfelde Ost")
+  private static final RegularStop LICHTERFELDE_OST_2 = TEST_MODEL.stop("Lichterfelde Ost")
     .withId(id("lichterfelde-gleis-2"))
     .withCoordinate(52.42985, 13.32807)
     .build();
-  static final RegularStop WESTHAFEN = TEST_MODEL.stop("Westhafen")
+  private static final RegularStop WESTHAFEN = TEST_MODEL.stop("Westhafen")
     .withVehicleType(null)
     .withCoordinate(52.42985, 13.32807)
     .build();
 
   // Atlanta
-  static final Station FIVE_POINTS_STATION = TEST_MODEL.station("Five Points")
+  private static final Station FIVE_POINTS_STATION = TEST_MODEL.station("Five Points")
     .withCoordinate(33.753899, -84.39156)
     .build();
 
-  static final RegularStop ARTS_CENTER = TEST_MODEL.stop("Arts Center")
+  private static final RegularStop ARTS_CENTER = TEST_MODEL.stop("Arts Center")
     .withCode("4456")
     .withCoordinate(52.52277, 13.41046)
     .build();
-  static final RegularStop ARTHUR = TEST_MODEL.stop("Arthur Langford Jr Pl SW at 220")
+  private static final RegularStop ARTHUR = TEST_MODEL.stop("Arthur Langford Jr Pl SW at 220")
     .withCoordinate(52.52277, 13.41046)
     .build();
 
-  static final RegularStop MERIDIAN_AVE = TEST_MODEL.stop("Meridian Ave N & N 148th St").build();
-  static final RegularStop MERIDIAN_N1 = TEST_MODEL.stop("Meridian N & Spencer").build();
-  static final RegularStop MERIDIAN_N2 = TEST_MODEL.stop("N 205th St & Meridian Ave N").build();
+  private static final RegularStop MERIDIAN_AVE = TEST_MODEL.stop(
+    "Meridian Ave N & N 148th St"
+  ).build();
+  private static final RegularStop MERIDIAN_N1 = TEST_MODEL.stop("Meridian N & Spencer").build();
+  private static final RegularStop MERIDIAN_N2 = TEST_MODEL.stop(
+    "N 205th St & Meridian Ave N"
+  ).build();
 
-  static LuceneIndex index;
+  private static final String FLEX_ZONE_NAME = "CCCCC";
+  private static final AreaStop FLEX_ZONE = TEST_MODEL.areaStop(FLEX_ZONE_NAME)
+    .withGeometry(Polygons.BERLIN)
+    .build();
 
-  static StopClusterMapper mapper;
+  private static LuceneIndex index;
 
   @BeforeAll
   static void setup() {
@@ -108,16 +118,17 @@ class LuceneIndexTest {
       MERIDIAN_N2,
       MERIDIAN_AVE
     ).forEach(siteRepository::withRegularStop);
+    siteRepository.withAreaStop(FLEX_ZONE);
     List.of(ALEXANDERPLATZ_STATION, BERLIN_HAUPTBAHNHOF_STATION, FIVE_POINTS_STATION).forEach(
       siteRepository::withStation
     );
-    var timetableRepository = new TimetableRepository(siteRepository.build());
-    timetableRepository.index();
-    var transitService = new DefaultTransitService(timetableRepository) {
+    var transitRepository = new TransitRepository(siteRepository.build());
+    transitRepository.index();
+    var transitService = new DefaultTransitService(transitRepository) {
       private final Multimap<StopLocation, TransitMode> modes = ImmutableMultimap.<
-          StopLocation,
-          TransitMode
-        >builder()
+        StopLocation,
+        TransitMode
+      >builder()
         .putAll(WESTHAFEN, FERRY, BUS)
         .build();
 
@@ -140,7 +151,7 @@ class LuceneIndexTest {
 
       @Override
       public Set<Route> findRoutes(StopLocation stop) {
-        return Set.of(TimetableRepositoryForTest.route("route1").withAgency(BVG).build());
+        return Set.of(TransitRepositoryForTest.route("route1").withAgency(BVG).build());
       }
 
       @Override
@@ -158,10 +169,9 @@ class LuceneIndexTest {
     };
     var stopConsolidationService = new DefaultStopConsolidationService(
       new DefaultStopConsolidationRepository(),
-      timetableRepository
+      transitRepository
     );
     index = new LuceneIndex(transitService, stopConsolidationService);
-    mapper = new StopClusterMapper(transitService, stopConsolidationService);
   }
 
   @Nested
@@ -255,6 +265,12 @@ class LuceneIndexTest {
       var cluster = result.getFirst();
       assertEquals(WESTHAFEN.getName().toString(), cluster.primary().name());
       assertEquals(List.of(FERRY.name(), BUS.name()), cluster.primary().modes());
+    }
+
+    @Test
+    void skipFlexZones() {
+      var result = index.queryStopClusters(FLEX_ZONE_NAME, null);
+      assertThat(result).isEmpty();
     }
 
     @Test

@@ -2,6 +2,7 @@ package org.opentripplanner.ext.flex.trip;
 
 import static org.opentripplanner.model.StopTime.MISSING_VALUE;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -40,6 +41,7 @@ public class UnscheduledTrip extends FlexTrip<UnscheduledTrip, UnscheduledTripBu
 
   private final BookingInfo[] dropOffBookingInfos;
   private final BookingInfo[] pickupBookingInfos;
+  private final long maxSpanDays;
 
   private final TimePenalty timePenalty;
 
@@ -61,8 +63,20 @@ public class UnscheduledTrip extends FlexTrip<UnscheduledTrip, UnscheduledTripBu
       this.pickupBookingInfos[i] = stopTimes.get(i).getPickupBookingInfo();
     }
     this.timePenalty = Objects.requireNonNull(builder.timePenalty());
+
+    var latestArrivalTime = Arrays.stream(this.stopTimes)
+      .mapToInt(StopTimeWindow::end)
+      .max()
+      .orElse(0);
+    this.maxSpanDays = Duration.ofSeconds(latestArrivalTime).toDays();
+
     DurationUtils.requireNonNegative(timePenalty.constant());
-    DoubleUtils.requireInRange(timePenalty.coefficient(), 0.05d, Double.MAX_VALUE);
+    DoubleUtils.requireNonNegative(timePenalty.coefficient());
+    if (timePenalty.isZero()) {
+      throw new IllegalArgumentException(
+        "Time penalty coefficient and constant cannot both be zero."
+      );
+    }
   }
 
   public static UnscheduledTripBuilder of(FeedScopedId id) {
@@ -146,6 +160,11 @@ public class UnscheduledTrip extends FlexTrip<UnscheduledTrip, UnscheduledTripBu
   }
 
   @Override
+  public long maxSpanDays() {
+    return maxSpanDays;
+  }
+
+  @Override
   public int numberOfStops() {
     return stopTimes.length;
   }
@@ -181,13 +200,13 @@ public class UnscheduledTrip extends FlexTrip<UnscheduledTrip, UnscheduledTripBu
   }
 
   @Override
-  public boolean isBoardingPossible(StopLocation stop) {
-    return findBoardIndex(stop) != STOP_INDEX_NOT_FOUND;
+  public boolean isBoardingPossible(FeedScopedId stopId) {
+    return findBoardIndex(stopId) != STOP_INDEX_NOT_FOUND;
   }
 
   @Override
-  public boolean isAlightingPossible(StopLocation stop) {
-    return findAlightIndex(stop) != STOP_INDEX_NOT_FOUND;
+  public boolean isAlightingPossible(FeedScopedId stopId) {
+    return findAlightIndex(stopId) != STOP_INDEX_NOT_FOUND;
   }
 
   @Override
@@ -206,18 +225,23 @@ public class UnscheduledTrip extends FlexTrip<UnscheduledTrip, UnscheduledTripBu
   }
 
   @Override
-  public int findBoardIndex(StopLocation fromStop) {
+  public int findBoardIndex(FeedScopedId fromStopId) {
     for (int i = 0; i < stopTimes.length; i++) {
       if (getBoardRule(i).isNotRoutable()) {
         continue;
       }
       StopLocation stop = stopTimes[i].stop();
       if (stop instanceof GroupStop groupStop) {
-        if (groupStop.getChildLocations().contains(fromStop)) {
+        if (
+          groupStop
+            .getChildLocations()
+            .stream()
+            .anyMatch(childStop -> childStop.getId().equals(fromStopId))
+        ) {
           return i;
         }
       } else {
-        if (stop.equals(fromStop)) {
+        if (stop.getId().equals(fromStopId)) {
           return i;
         }
       }
@@ -226,18 +250,23 @@ public class UnscheduledTrip extends FlexTrip<UnscheduledTrip, UnscheduledTripBu
   }
 
   @Override
-  public int findAlightIndex(StopLocation toStop) {
+  public int findAlightIndex(FeedScopedId toStopId) {
     for (int i = stopTimes.length - 1; i >= 0; i--) {
       if (getAlightRule(i).isNotRoutable()) {
         continue;
       }
       StopLocation stop = stopTimes[i].stop();
       if (stop instanceof GroupStop groupStop) {
-        if (groupStop.getChildLocations().contains(toStop)) {
+        if (
+          groupStop
+            .getChildLocations()
+            .stream()
+            .anyMatch(childStop -> childStop.getId().equals(toStopId))
+        ) {
           return i;
         }
       } else {
-        if (stop.equals(toStop)) {
+        if (stop.getId().equals(toStopId)) {
           return i;
         }
       }

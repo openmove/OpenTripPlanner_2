@@ -6,7 +6,6 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -18,7 +17,7 @@ import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.codecs.PostingsFormat;
-import org.apache.lucene.codecs.lucene103.Lucene103Codec;
+import org.apache.lucene.codecs.lucene104.Lucene104Codec;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field.Store;
 import org.apache.lucene.document.LatLonDocValuesField;
@@ -40,7 +39,7 @@ import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
-import org.apache.lucene.search.suggest.document.Completion101PostingsFormat;
+import org.apache.lucene.search.suggest.document.Completion104PostingsFormat;
 import org.apache.lucene.search.suggest.document.CompletionAnalyzer;
 import org.apache.lucene.search.suggest.document.ContextSuggestField;
 import org.apache.lucene.search.suggest.document.SuggestIndexSearcher;
@@ -49,12 +48,10 @@ import org.opentripplanner.core.model.i18n.I18NString;
 import org.opentripplanner.core.model.id.FeedScopedId;
 import org.opentripplanner.ext.stopconsolidation.StopConsolidationService;
 import org.opentripplanner.street.geometry.WgsCoordinate;
-import org.opentripplanner.transit.model.site.StopLocation;
-import org.opentripplanner.transit.model.site.StopLocationsGroup;
+import org.opentripplanner.transit.model.site.StopType;
 import org.opentripplanner.transit.service.DefaultTransitService;
-import org.opentripplanner.transit.service.TimetableRepository;
+import org.opentripplanner.transit.service.TransitRepository;
 import org.opentripplanner.transit.service.TransitService;
-import org.opentripplanner.utils.collection.ListUtils;
 
 public class LuceneIndex implements Serializable {
 
@@ -81,10 +78,10 @@ public class LuceneIndex implements Serializable {
    * constructor.
    */
   public LuceneIndex(
-    TimetableRepository timetableRepository,
+    TransitRepository transitRepository,
     StopConsolidationService stopConsolidationService
   ) {
-    this(new DefaultTransitService(timetableRepository), stopConsolidationService);
+    this(new DefaultTransitService(transitRepository), stopConsolidationService);
   }
 
   /**
@@ -114,41 +111,13 @@ public class LuceneIndex implements Serializable {
           iwcWithSuggestField(analyzer, Set.of(SUGGEST))
         )
       ) {
-        transitService
+        var regularStops = transitService
           .listStopLocations()
-          .forEach(stopLocation ->
-            addToIndex(
-              directoryWriter,
-              StopLocation.class,
-              stopLocation.getId().toString(),
-              List.of(),
-              ListUtils.ofNullable(stopLocation.getName()),
-              ListUtils.ofNullable(stopLocation.getCode()),
-              stopLocation.getCoordinate().latitude(),
-              stopLocation.getCoordinate().longitude()
-            )
-          );
-
-        transitService
-          .listStopLocationGroups()
-          .forEach(stopLocationsGroup ->
-            addToIndex(
-              directoryWriter,
-              StopLocationsGroup.class,
-              stopLocationsGroup.getId().toString(),
-              List.of(),
-              ListUtils.ofNullable(stopLocationsGroup.getName()),
-              List.of(),
-              stopLocationsGroup.getCoordinate().latitude(),
-              stopLocationsGroup.getCoordinate().longitude()
-            )
-          );
-
+          .stream()
+          .filter(stopLocation -> stopLocation.getStopType() == StopType.REGULAR)
+          .toList();
         stopClusterMapper
-          .generateStopClusters(
-            transitService.listStopLocations(),
-            transitService.listStopLocationGroups()
-          )
+          .generateStopClusters(regularStops, transitService.listStopLocationGroups())
           .forEach(stopCluster ->
             addToIndex(
               directoryWriter,
@@ -184,11 +153,11 @@ public class LuceneIndex implements Serializable {
   }
 
   private StopCluster toStopCluster(Document document) {
-    var primaryId = FeedScopedId.parse(document.get(ID));
+    var primaryId = FeedScopedId.parseStrict(document.get(ID));
     var primary = stopClusterMapper.toLocation(primaryId);
 
     var secondaryIds = Arrays.stream(document.getValues(SECONDARY_IDS))
-      .map(FeedScopedId::parse)
+      .map(FeedScopedId::parseStrict)
       .map(stopClusterMapper::toLocation)
       .toList();
 
@@ -197,8 +166,8 @@ public class LuceneIndex implements Serializable {
 
   static IndexWriterConfig iwcWithSuggestField(Analyzer analyzer, final Set<String> suggestFields) {
     IndexWriterConfig iwc = new IndexWriterConfig(analyzer);
-    Codec filterCodec = new Lucene103Codec() {
-      final PostingsFormat postingsFormat = new Completion101PostingsFormat();
+    Codec filterCodec = new Lucene104Codec() {
+      final PostingsFormat postingsFormat = new Completion104PostingsFormat();
 
       @Override
       public PostingsFormat getPostingsFormatForField(String field) {

@@ -7,9 +7,9 @@ import java.util.stream.Stream;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.opentripplanner.transit.model._data.TransitTestEnvironment;
-import org.opentripplanner.updater.spi.UpdateError;
-import org.opentripplanner.updater.trip.SiriTestHelper;
+import org.opentripplanner.transit.model.TransitTestEnvironment;
+import org.opentripplanner.updater.spi.UpdateErrorType;
+import org.opentripplanner.updater.trip.siri.SiriTestHelper;
 
 class InvalidStopPointRefTest {
 
@@ -44,6 +44,6 @@ class InvalidStopPointRefTest {
 
     var result = siri.applyEstimatedTimetable(invalidJourney);
     assertEquals(0, result.successful());
-    assertFailure(UpdateError.UpdateErrorType.EMPTY_STOP_POINT_REF, result);
+    assertFailure(UpdateErrorType.EMPTY_STOP_POINT_REF, result);
   }
 }
